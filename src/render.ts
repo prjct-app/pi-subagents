@@ -1,6 +1,7 @@
+import type { Theme } from '@earendil-works/pi-coding-agent';
 import { Text, truncateToWidth } from '@earendil-works/pi-tui';
 import { plain } from './text.ts';
-import type { Job, Ledger, Report } from './schema.ts';
+import type { Job, JobState, Ledger, Report } from './schema.ts';
 
 /**
  * How jobs read, in the terminal and in the message that reaches the model.
@@ -23,14 +24,23 @@ const LINE = 160;
 const one = (text: unknown, limit = LINE): string =>
   plain(text).replace(/\s+/g, ' ').trim().slice(0, limit);
 
-const seconds = (job: Job): string => {
+/** The theme color a state reads in: one glance, no legend. */
+export const stateColor = (state: JobState): 'accent' | 'dim' | 'error' | 'muted' | 'success' | 'warning' =>
+  state === 'completed' ? 'success'
+    : state === 'failed' || state === 'timed_out' ? 'error'
+    : state === 'cancelled' || state === 'interrupted' ? 'muted'
+    : state === 'running' ? 'accent'
+    : state === 'starting' || state === 'stopping' ? 'warning'
+    : 'dim';
+
+export const seconds = (job: Job): string => {
   const from = job.started ?? job.admitted;
   const to = job.settled ?? Date.now();
   const elapsed = Math.max(0, Math.round((to - from) / 1000));
   return elapsed >= 60 ? `${Math.floor(elapsed / 60)}m${String(elapsed % 60).padStart(2, '0')}s` : `${elapsed}s`;
 };
 
-const spent = (job: Job): string =>
+export const spent = (job: Job): string =>
   job.usage?.cost === undefined ? '' : ` · $${job.usage.cost < 0.01 ? job.usage.cost.toFixed(4) : job.usage.cost.toFixed(2)}`;
 
 /** One job, one line: who, what, how it is going. */
@@ -83,17 +93,28 @@ export function collapsed(heading: string) {
   };
 }
 
-export function jobView(job: Job | undefined, expanded: boolean) {
+/** One job, one line, in the session's own colors. */
+export function themedJobLine(job: Job, theme: Theme): string {
+  return `${theme.bold(plain(job.name))} ${theme.fg('muted', job.role)} ${theme.fg(stateColor(job.state), job.state)} `
+    + `${plain(job.subject)} ${theme.fg('dim', `${seconds(job)}${spent(job)}`)}`;
+}
+
+export function jobView(job: Job | undefined, expanded: boolean, theme?: Theme) {
   if (!job || typeof job.subject !== 'string') return new Text('Job unavailable', 0, 0);
-  const heading = `▸ ${jobLine(job)}`;
+  const heading = theme ? `▸ ${themedJobLine(job, theme)}` : `▸ ${jobLine(job)}`;
   if (!expanded) return collapsed(heading);
   return new Text([heading, ...reportLines(job)].join('\n'), 1, 0);
 }
 
-export function ledgerView(ledger: Ledger | undefined, expanded: boolean) {
+export function ledgerView(ledger: Ledger | undefined, expanded: boolean, theme?: Theme) {
   const jobs = ledger?.jobs ?? [];
   const open = jobs.filter(job => job.state === 'running' || job.state === 'starting' || job.state === 'queued').length;
   const heading = `▸ jobs · ${jobs.length} delegated · ${open} open`;
+  if (theme) {
+    const titled = theme.fg('toolTitle', theme.bold(heading));
+    if (!expanded) return collapsed(titled);
+    return new Text([titled, ...ledgerLines(ledger)].join('\n'), 1, 0);
+  }
   if (!expanded) return collapsed(heading);
   return new Text([heading, ...ledgerLines(ledger)].join('\n'), 1, 0);
 }

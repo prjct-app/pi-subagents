@@ -186,7 +186,10 @@ test('every entry this writes has a renderer, and they render text', async () =>
   for (const customType of written) {
     assert.ok(h.renderers.has(customType), `${customType} has a renderer, so it cannot print as raw data`);
   }
-  const rendered = h.renderers.get('agent-job')({ data: job }, { expanded: true }, {}, {}).render(120).join('\n');
+  // Renderers always receive the real theme from Pi; an identity double is
+  // enough to prove the output is text, not a record.
+  const theme: any = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+  const rendered = h.renderers.get('agent-job')({ data: job }, { expanded: true }, theme, {}).render(120).join('\n');
   assert.doesNotMatch(rendered, /[{}]/, 'a job renders as text, not as a record');
   assert.equal(h.renderers.get('agent-jobs')({ data: h.ledger() }, { expanded: true }, {}, {}).render(120).join(''), '',
     'the ledger is state for a reload and for the panel, not something to read in the transcript');

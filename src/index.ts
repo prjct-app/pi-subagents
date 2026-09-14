@@ -6,10 +6,12 @@ import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
 import { DEFAULT_LIMITS, find, live, undelivered, unresolved } from './manager.ts';
-import { jobLine, jobView, ledgerLines, ledgerView, resultContent } from './render.ts';
+import { jobLine, jobView, ledgerLines, ledgerView, resultContent, seconds, spent, themedJobLine } from './render.ts';
 import { getActiveRoot, registerHandle } from './host.ts';
+import { plain } from './text.ts';
+import { openAgentsPanel } from './panel.ts';
 import { spawnRunner } from './runner.ts';
-import { ROLES, checkLedger, type DelegateAnswer, type DelegateAsk, type Job, type Ledger } from './schema.ts';
+import { ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger } from './schema.ts';
 
 /**
  * pi-subagents: ephemeral subagents a session delegates to, usable on their
@@ -36,8 +38,16 @@ export type JobsOptions = {
   tickMs?: number;
 };
 
-/** What the rest of the extension needs from this one, and nothing more. */
-export type JobsHandle = { lines: () => string[] };
+/**
+ * What the rest of the extension needs from this one, and nothing more: the
+ * lines for a plain list, the ledger for anything that draws, and the one
+ * control — stop — that a panel or a neighbour package may ask for.
+ */
+export type JobsHandle = {
+  lines: () => string[];
+  ledger: () => Ledger | undefined;
+  cancel: (jobId: string, reason: string) => Promise<void>;
+};
 
 export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHandle {
   // pi-team registers a provider through the registry when a team task can be
@@ -49,6 +59,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     running: false,
     timer: undefined as ReturnType<typeof setInterval> | undefined,
     choices: [] as ModelChoice[],
+    widget: undefined as string | undefined,
   };
 
   const ctx = (): ExtensionContext => {
@@ -119,6 +130,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const tick = (): void => {
     const jobs = state.jobs;
     if (!jobs) return;
+    showWidget();
     void jobs.tick().then(deliver).catch(() => undefined);
     if (live(jobs.ledger()).length === 0) stopTicking();
   };
@@ -150,12 +162,30 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     };
   };
 
+  /**
+   * One line above the editor while any job is live, nothing when idle. It is
+   * the same ledger the panel draws, so the two can never disagree; the 5s
+   * tick that already runs for live jobs is what keeps the times moving.
+   */
+  const showWidget = (): void => {
+    const context = state.ctx;
+    if (!context || !context.hasUI) return;
+    const active = (state.jobs?.ledger().jobs ?? []).filter(job => !isTerminal(job.state));
+    const text = active.length
+      ? `agents: ${active.map(job => `${plain(job.name)} ${job.state} ${seconds(job)}${spent(job)}`).join(' · ')} · /agents`
+      : undefined;
+    if (text === state.widget) return;
+    state.widget = text;
+    context.ui.setWidget('agents', text === undefined ? undefined : [text]);
+  };
+
   const build = (session: string): Jobs => makeJobs(session, {
     runner: (options.makeRunner ?? spawnRunner)({ guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate }),
     now: () => Date.now(),
     persist: ledger => { try { pi.appendEntry('agent-jobs', ledger); } catch { /* the session is closing */ } },
     onChange: ledger => {
       if (live(ledger).length > 0) startTicking();
+      showWidget();
       // A job that ends mid-turn is handed over at once rather than waiting for
       // a tick. Queued, not called: this runs inside the change it is reacting
       // to, and handing over is itself a change. The second pass finds nothing
@@ -165,12 +195,12 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   });
 
   pi.registerEntryRenderer('agent-jobs', () => new Container());
-  pi.registerEntryRenderer<Job>('agent-job', (entry, { expanded }) => jobView(entry.data, expanded));
-  pi.registerMessageRenderer<{ jobs?: Job[] }>('agent-job-result', (message, { expanded }) => {
+  pi.registerEntryRenderer<Job>('agent-job', (entry, { expanded }, theme) => jobView(entry.data, expanded, theme));
+  pi.registerMessageRenderer<{ jobs?: Job[] }>('agent-job-result', (message, { expanded }, theme) => {
     const jobs = message.details?.jobs ?? [];
-    const heading = `▸ ${jobs.length} job${jobs.length === 1 ? '' : 's'} reported`;
+    const heading = theme.fg('toolTitle', theme.bold(`▸ ${jobs.length} job${jobs.length === 1 ? '' : 's'} reported`));
     if (!expanded) return new Text(heading, 0, 0);
-    return new Text([heading, ...jobs.map(job => jobLine(job))].join('\n'), 1, 0);
+    return new Text([heading, ...jobs.map(job => themedJobLine(job, theme))].join('\n'), 1, 0);
   });
 
   /**
@@ -223,8 +253,12 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
           details: job,
         };
       },
-      renderCall(args: any) { return new Text(`▸ delegate · ${String(args?.role ?? '')} · ${String(args?.subject ?? '')}`, 0, 0); },
-      renderResult(result: any, { expanded }: { expanded: boolean }) { return jobView(result?.details, expanded); },
+      renderCall(args: any, theme: any) {
+        const text = theme.fg('toolTitle', theme.bold('▸ delegate'))
+          + ` ${theme.fg('muted', String(args?.role ?? ''))} ${plain(String(args?.subject ?? ''))}`;
+        return new Text(text, 0, 0);
+      },
+      renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return jobView(result?.details, expanded, theme); },
     } as Parameters<ExtensionAPI['registerTool']>[0]);
   };
 
@@ -263,12 +297,15 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         details: ledger,
       };
     },
-    renderCall(args: any) { return new Text(`▸ jobs · ${String(args?.action ?? 'status')}`, 0, 0); },
-    renderResult(result: any, { expanded }: { expanded: boolean }) { return ledgerView(result?.details, expanded); },
+    renderCall(args: any, theme: any) {
+      return new Text(`${theme.fg('toolTitle', theme.bold('▸ jobs'))} ${theme.fg('muted', String(args?.action ?? 'status'))}`, 0, 0);
+    },
+    renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return ledgerView(result?.details, expanded, theme); },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
 
   pi.on('session_start', async (event: any, context: ExtensionContext) => {
     state.ctx = context;
+    state.widget = undefined;
     state.choices = choices(context);
     registerDelegate(choiceHint(state.choices));
     const jobs = build(context.sessionManager.getSessionId());
@@ -298,14 +335,20 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   });
 
   /**
-   * The one command a person needs. The panel this grows into watches the same
-   * ledger, so the two can never disagree about what is running.
+   * The one command a person needs. In a terminal it is the panel: the same
+   * ledger everything else reads, live, with a stop key. Anywhere else it is
+   * the lines.
    */
-  const handle: JobsHandle = { lines: () => ledgerLines(state.jobs?.ledger()) };
+  const handle: JobsHandle = {
+    lines: () => ledgerLines(state.jobs?.ledger()),
+    ledger: () => state.jobs?.ledger(),
+    cancel: async (jobId, reason) => { await state.jobs?.cancel(jobId, reason); },
+  };
   pi.registerCommand('agents', {
-    description: 'List the subagents this session delegated and their state',
+    description: 'Watch and control the subagents this session delegated',
     handler: async (_args, context) => {
-      context.ui.notify(handle.lines().join('\n'), 'info');
+      if (context.mode !== 'tui') { context.ui.notify(handle.lines().join('\n'), 'info'); return; }
+      await openAgentsPanel(context, handle);
     },
   });
   // Other extensions in this process (pi-team, most of all) read the ledger

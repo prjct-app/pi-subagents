@@ -13,7 +13,7 @@ const good = (over: Partial<Report> = {}): Report => ({
 });
 
 /** The host, as much of it as this extension touches. */
-function host(options: { models?: any[]; scoped?: any[] } = {}) {
+function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string> } = {}) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const renderers = new Map<string, any>();
@@ -31,22 +31,24 @@ function host(options: { models?: any[]; scoped?: any[] } = {}) {
     registerMessageRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
     appendEntry: (customType: string, data: any) => { entries.push({ customType, data }); },
     sendMessage: (message: any, given: any) => { sent.push({ message, options: given }); },
+    getActiveTools: () => ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
   } as unknown as ExtensionAPI;
 
   const model = (provider: string, id: string, input: number) =>
     ({ provider, id, name: id, cost: { input, output: input * 4 }, contextWindow: 200_000 });
   const available = options.models ?? [model('openai-codex', 'gpt-5.4-mini', 0.25), model('anthropic', 'claude-opus-4-5', 5)];
 
+  const notices: string[] = [];
   const ctx: any = {
     cwd: '/work',
     model: available.at(-1),
     modelRegistry: { getAvailable: () => available },
     scopedModels: (options.scoped ?? []).map(value => ({ model: value })),
     isIdle: () => session.idle,
+    ui: { notify: (text: string) => { notices.push(text); }, setWidget: () => undefined },
     sessionManager: {
       getSessionId: () => 's1',
-      getBranch: () => entries.filter(entry => entry.customType === 'agent-jobs')
-        .map(entry => ({ type: 'custom', customType: entry.customType, data: entry.data })),
+      getBranch: () => entries.map(entry => ({ type: 'custom', customType: entry.customType, data: entry.data })),
     },
   };
 
@@ -60,13 +62,13 @@ function host(options: { models?: any[]; scoped?: any[] } = {}) {
   }) as any;
   const made: any[] = [];
 
-  installJobs(pi, { makeRunner, tickMs: 50 });
+  installJobs(pi, { makeRunner, tickMs: 50, ...(options.complete ? { complete: options.complete } : {}) });
 
   const emit = async (name: string, event: unknown = {}) => {
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
   };
   return {
-    pi, tools, entries, sent, runs, renderers, ctx, session, made,
+    pi, tools, entries, sent, runs, renderers, ctx, session, made, notices, commands,
     emit,
     of: (job: Job) => runs.get(job.id)!,
     ledger: () => entries.filter(entry => entry.customType === 'agent-jobs').at(-1)?.data,
@@ -243,4 +245,56 @@ test('a session going away takes its children with it', async () => {
   const job = (await h.delegate()).details as Job;
   await h.emit('session_shutdown', { reason: 'quit' });
   assert.equal(h.of(job).stops.length, 1);
+});
+
+test('auto-delegation is off until a person turns it on, and then complex prompts launch experts', async () => {
+  const calls: string[] = [];
+  const h = host({
+    complete: async (_system, user) => {
+      calls.push(user);
+      return '{"complex": true, "subtasks": [' +
+        '{"role": "explorer", "subject": "map the store", "task": "Read src/store/ and report how state flows."},' +
+        '{"role": "reviewer", "subject": "review the runner", "task": "Read src/runner.ts and report the races."}]}';
+    },
+  });
+  await h.emit('session_start', { reason: 'startup' });
+  const prompt = `Rework how jobs settle across the store, the runner and the panel. ${'Detail. '.repeat(30)}`;
+
+  // Off by default: a complex prompt is not even triaged.
+  await h.emit('input', { text: prompt, source: 'interactive' });
+  await settleTick();
+  assert.equal(calls.length, 0);
+  assert.equal(h.runs.size, 0);
+
+  await h.commands.get('agents').handler('auto on', h.ctx);
+  assert.match(h.notices.at(-1) ?? '', /Auto-delegation on/);
+
+  session_idle: {
+    await h.emit('input', { text: prompt, source: 'interactive' });
+    const deadline = Date.now() + 2000;
+    while (h.runs.size < 2 && Date.now() < deadline) await settleTick();
+  }
+  assert.equal(h.runs.size, 2, 'the triage became jobs without the model calling any tool');
+  const launched = [...h.runs.values()].map(run => run.job);
+  assert.deepEqual(launched.map(job => job.subject).sort(), ['map the store', 'review the runner']);
+  assert.deepEqual(launched[0].tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
+    'auto jobs inherit the active tools like any other');
+  const told = h.sent.find(item => item.message.customType === 'agents-auto');
+  assert.ok(told, 'the session is told what was launched');
+  assert.match(told.message.content, /auto-launch 2 expert subagents/);
+  assert.match(told.message.content, /Do not redo their reading/);
+  assert.ok(h.entries.some(entry => entry.customType === 'agents-auto' && entry.data.enabled === true),
+    'the toggle survives a reload');
+});
+
+test('a reload restores the auto toggle from the session', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'startup' });
+  await h.commands.get('agents').handler('auto on', h.ctx);
+  // A second install over the same entries is the reload.
+  const again = host();
+  again.entries.push(...h.entries);
+  await again.emit('session_start', { reason: 'reload' });
+  await again.commands.get('agents').handler('auto', again.ctx);
+  assert.match(again.notices.at(-1) ?? '', /is on/);
 });

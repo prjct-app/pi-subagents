@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -10,6 +11,7 @@ import { jobLine, jobView, ledgerLines, ledgerView, resultContent, seconds, spen
 import { getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
+import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
 import { spawnRunner } from './runner.ts';
 import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger } from './schema.ts';
 
@@ -35,8 +37,16 @@ export type JobsOptions = {
   activeRoot?: () => string | undefined;
   /** Injected by the tests; the real one spawns `pi`. */
   makeRunner?: typeof spawnRunner;
+  /** Injected by the tests; the real one asks the cheapest model on the registry. */
+  complete?: (system: string, user: string, ctx: ExtensionContext) => Promise<string>;
   tickMs?: number;
 };
+
+/** Auto-delegation starts off; a person turns it on with /agents auto on. */
+function autoFromEnv(): boolean {
+  const raw = process.env.PI_AGENTS_AUTO?.trim().toLowerCase();
+  return raw === '1' || raw === 'true';
+}
 
 /**
  * What the rest of the extension needs from this one, and nothing more: the
@@ -60,6 +70,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     timer: undefined as ReturnType<typeof setInterval> | undefined,
     choices: [] as ModelChoice[],
     widget: undefined as string | undefined,
+    /** Auto-delegation: the toggle, and whether a triage call is in flight. */
+    auto: { enabled: autoFromEnv(), inFlight: false },
   };
 
   const ctx = (): ExtensionContext => {
@@ -196,6 +208,63 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     context.ui.setWidget('agents', text === undefined ? undefined : [text]);
   };
 
+  /** One bounded answer from the cheapest model this session can reach. */
+  const complete = options.complete ?? (async (system: string, user: string, context: ExtensionContext): Promise<string> => {
+    const cheapest = state.choices[0];
+    const registry = (context as any).modelRegistry;
+    const model = cheapest
+      ? registry?.getAvailable?.().find((m: any) => m?.provider === cheapest.provider && m?.id === cheapest.modelId)
+      : undefined;
+    if (!model) return '';
+    const { completeSimple } = await import('@earendil-works/pi-ai/compat');
+    const reply = await completeSimple(model, {
+      systemPrompt: system,
+      messages: [{ role: 'user', content: user, timestamp: Date.now() }],
+    } as any);
+    return (reply.content ?? []).filter((c: any) => c?.type === 'text').map((c: any) => c.text).join('\n');
+  });
+
+  /**
+   * Triage one typed prompt, and launch what it earns.
+   *
+   * The turn the prompt started is never waited on: the call runs beside it,
+   * and the session is told what was launched as a steer — so the model learns
+   * what is already being read before it goes and reads the same things.
+   */
+  const triageAndLaunch = async (prompt: string, context: ExtensionContext): Promise<void> => {
+    const jobs = state.jobs;
+    if (!jobs) return;
+    const plan = parseTriage(await complete(TRIAGE_SYSTEM, `Working directory: ${context.cwd}\n\nTask:\n${prompt}`, context));
+    if (!plan.complex) return;
+    const launched: Job[] = [];
+    for (const subtask of plan.subtasks.slice(0, AUTO_MAX)) {
+      // The session's own model to start; the child chooses from there.
+      const model = resolve(undefined);
+      if ('refused' in model) break;
+      const key = `auto:${createHash('sha256').update(`${prompt}:${subtask.subject}`).digest('hex').slice(0, 16)}`;
+      const rootId = activeRoot();
+      const decision = await jobs.delegate({
+        role: subtask.role, subject: subtask.subject, task: subtask.task,
+        context: `The person asked the session you are assisting:\n${prompt.slice(0, 800)}`,
+        ...model, cwd: context.cwd, depth: 0, tools: inheritedTools(), key,
+        ...(rootId ? { rootId } : {}),
+      });
+      if (decision.ok && !decision.repeated) launched.push(decision.job);
+    }
+    if (launched.length === 0) return;
+    startTicking();
+    const content = [
+      `This task was complex enough to auto-launch ${launched.length} expert subagent${launched.length === 1 ? '' : 's'} beside you:`,
+      ...launched.map(job => `- ${plain(job.name)} (${job.role}) — ${plain(job.subject)}`),
+      'They read in parallel with fresh context and their evidence arrives here. Do not redo their '
+        + 'reading; integrate their reports when they land. Stop one with agent_jobs if it is wrong.',
+    ].join('\n');
+    try {
+      pi.sendMessage({ customType: 'agents-auto', display: true, details: { jobs: launched }, content },
+        context.isIdle() ? { triggerTurn: true, deliverAs: 'followUp' } : { deliverAs: 'steer' });
+    } catch { /* the session is closing */ }
+  };
+
   const build = (session: string): Jobs => makeJobs(session, {
     runner: (options.makeRunner ?? spawnRunner)({ guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate, catalogue: () => state.choices }),
     now: () => Date.now(),
@@ -320,9 +389,34 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return ledgerView(result?.details, expanded, theme); },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
 
+  /**
+   * Auto-delegation never delays the prompt it watches: the handler returns
+   * immediately and the triage runs beside the turn it started.
+   */
+  pi.on('input', (event: any, context: ExtensionContext) => {
+    if (!state.auto.enabled || state.auto.inFlight) return undefined;
+    if (event?.source !== 'interactive' || !worthTriaging(String(event?.text ?? ''))) return undefined;
+    state.auto.inFlight = true;
+    void triageAndLaunch(String(event.text), context)
+      .catch(() => undefined)
+      .finally(() => { state.auto.inFlight = false; });
+    return undefined;
+  });
+
+  pi.registerMessageRenderer<{ jobs?: Job[] }>('agents-auto', (message, { expanded }, theme) => {
+    const jobs = message.details?.jobs ?? [];
+    const heading = theme.fg('toolTitle', theme.bold(`▸ auto-delegated to ${jobs.length} subagent${jobs.length === 1 ? '' : 's'}`));
+    if (!expanded) return new Text(heading, 0, 0);
+    return new Text([heading, ...jobs.map(job => themedJobLine(job, theme))].join('\n'), 1, 0);
+  });
+
   pi.on('session_start', async (event: any, context: ExtensionContext) => {
     state.ctx = context;
     state.widget = undefined;
+    // The toggle survives a reload as a session entry, like the ledger does.
+    const pref = context.sessionManager.getBranch()
+      .filter((entry: any) => entry.type === 'custom' && entry.customType === 'agents-auto').at(-1) as any;
+    if (typeof pref?.data?.enabled === 'boolean') state.auto.enabled = pref.data.enabled;
     state.choices = choices(context);
     registerDelegate(choiceHint(state.choices));
     const jobs = build(context.sessionManager.getSessionId());
@@ -362,8 +456,27 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     cancel: async (jobId, reason) => { await state.jobs?.cancel(jobId, reason); },
   };
   pi.registerCommand('agents', {
-    description: 'Watch and control the subagents this session delegated',
-    handler: async (_args, context) => {
+    description: 'Watch and control the subagents this session delegated; /agents auto on|off toggles auto-delegation',
+    getArgumentCompletions(prefix) {
+      const parts = prefix.split(/\s+/);
+      const values = parts.length === 1 ? ['auto'] : parts.length === 2 && parts[0] === 'auto' ? ['on', 'off'] : [];
+      const stem = parts.slice(0, -1).join(' ');
+      return values.filter(v => v.startsWith(parts.at(-1) ?? '')).map(v => ({ value: `${stem ? stem + ' ' : ''}${v}`, label: v }));
+    },
+    handler: async (args, context) => {
+      const [word, value] = args.trim().split(/\s+/);
+      if (word === 'auto') {
+        if (value === 'on' || value === 'off') {
+          state.auto.enabled = value === 'on';
+          try { pi.appendEntry('agents-auto', { enabled: state.auto.enabled }); } catch { /* the session is closing */ }
+          context.ui.notify(state.auto.enabled
+            ? 'Auto-delegation on: a complex prompt launches expert subagents beside the session.'
+            : 'Auto-delegation off.', 'info');
+          return;
+        }
+        context.ui.notify(`Auto-delegation is ${state.auto.enabled ? 'on' : 'off'}. /agents auto on|off`, 'info');
+        return;
+      }
       if (context.mode !== 'tui') { context.ui.notify(handle.lines().join('\n'), 'info'); return; }
       await openAgentsPanel(context, handle);
     },

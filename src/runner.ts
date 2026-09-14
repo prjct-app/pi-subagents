@@ -4,7 +4,7 @@ import { basename } from 'node:path';
 import { childPrompt } from './context.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
 import {
-  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, REPORT_TOOL, checkAsk,
+  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, checkAsk,
   type DelegateAnswer, type DelegateAsk, type Job, type Usage,
 } from './schema.ts';
 
@@ -129,7 +129,7 @@ export function childArgs(guardPath: string, tools: readonly string[] = CHILD_TO
     '--no-skills', '--no-prompt-templates',
     // Non-interactive: never prompt a person who is not watching.
     '--no-approve',
-    // Read-only, and the guard enforces the same set from inside.
+    // The inherited allowlist; the guard enforces the same set from inside.
     '--tools', tools.join(','),
   ];
 }
@@ -185,7 +185,13 @@ export function spawnRunner(options: {
     // The child's own depth, which is one below the job that is starting it.
     const depth = job.depth + 1;
     const mayDelegate = options.onDelegate !== undefined && depth < limit;
-    const tools = options.tools ?? (mayDelegate ? [...CHILD_TOOLS, DELEGATE_TOOL] : CHILD_TOOLS);
+    /**
+     * What the child may call: the tools the parent had at admission, or the
+     * read-only set a job admitted before inheritance was promised. The guard
+     * tools ride along; a test can still widen the whole set via options.
+     */
+    const inherited = options.tools ?? job.tools ?? READ_ONLY_TOOLS;
+    const tools = [...new Set([...inherited, REPORT_TOOL, ...(mayDelegate ? [DELEGATE_TOOL] : [])])];
     const launch = invoke(childArgs(options.guardPath, tools));
     const child: ChildProcess = start(launch.command, launch.args, {
       cwd: job.cwd,
@@ -196,6 +202,9 @@ export function spawnRunner(options: {
         ...process.env,
         PI_SUBAGENTS_CHILD: '1',
         PI_SUBAGENTS_DEPTH: String(depth),
+        // The guard enforces the identical list from inside, where a tool that
+        // arrived some other way is held to it too.
+        PI_SUBAGENTS_TOOLS: tools.join(','),
         ...(mayDelegate ? { PI_SUBAGENTS_CAN_DELEGATE: '1' } : {}),
       },
     });

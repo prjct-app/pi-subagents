@@ -12,7 +12,8 @@ import {
  * A child starts with `--no-extensions`, so nothing ambient reaches it — which
  * also means none of the guards an ambient extension would have brought. This
  * file is what a child has instead: the one way to report, and the fence around
- * what it can read.
+ * the tools it inherited. A child with edit or write is a worker; a child
+ * without them is a reader, and its shell answers read-only commands only.
  *
  * It arms itself only inside a child this package spawned. Loaded anywhere else
  * it does nothing at all, because a guard that strips a person's tools because
@@ -20,6 +21,41 @@ import {
  */
 export default function subagentGuard(pi: ExtensionAPI): void {
   installGuard(pi);
+}
+
+/**
+ * Commands a reader's shell never runs, and the ones it answers.
+ *
+ * The same boundary plan mode draws for a person, drawn for a child: the
+ * parent decides *which* tools a child inherits, and when that set holds no
+ * edit and no write, the child's bash is held to reading too. Patterns from
+ * Pi's plan-mode extension, kept deliberately conservative.
+ */
+const BASH_DESTRUCTIVE = [
+  /\brm\b/i, /\brmdir\b/i, /\bmv\b/i, /\bcp\b/i, /\bmkdir\b/i, /\btouch\b/i,
+  /\bchmod\b/i, /\bchown\b/i, /\bchgrp\b/i, /\bln\b/i, /\btee\b/i, /\btruncate\b/i,
+  /\bdd\b/i, /\bshred\b/i, /(^|[^<])>(?!>)/, />>/,
+  /\bnpm\s+(install|uninstall|update|ci|link|publish)/i, /\byarn\s+(add|remove|install|publish)/i,
+  /\bpnpm\s+(add|remove|install|publish)/i, /\bpip\s+(install|uninstall)/i,
+  /\bapt(-get)?\s+(install|remove|purge|update|upgrade)/i, /\bbrew\s+(install|uninstall|upgrade)/i,
+  /\bgit\s+(add|commit|push|pull|merge|rebase|reset|checkout|branch\s+-[dD]|stash|cherry-pick|revert|tag|init|clone)/i,
+  /\bsudo\b/i, /\bsu\b/i, /\bkill\b/i, /\bpkill\b/i, /\bkillall\b/i,
+  /\breboot\b/i, /\bshutdown\b/i, /\bsystemctl\s+(start|stop|restart|enable|disable)/i,
+  /\bservice\s+\S+\s+(start|stop|restart)/i,
+];
+const BASH_SAFE = [
+  /^\s*cat\b/, /^\s*head\b/, /^\s*tail\b/, /^\s*less\b/, /^\s*more\b/, /^\s*grep\b/,
+  /^\s*find\b/, /^\s*ls\b/, /^\s*pwd\b/, /^\s*echo\b/, /^\s*printf\b/, /^\s*wc\b/,
+  /^\s*sort\b/, /^\s*uniq\b/, /^\s*diff\b/, /^\s*file\b/, /^\s*stat\b/, /^\s*du\b/,
+  /^\s*tree\b/, /^\s*which\b/, /^\s*type\b/, /^\s*env\b/, /^\s*date\b/, /^\s*ps\b/,
+  /^\s*git\s+(status|log|diff|show|branch|remote|config\s+--get)/i, /^\s*git\s+ls-/i,
+  /^\s*node\s+--version/i, /^\s*jq\b/, /^\s*sed\s+-n/i, /^\s*awk\b/, /^\s*rg\b/,
+  /^\s*fd\b/, /^\s*bat\b/, /^\s*eza\b/,
+];
+
+/** A command a read-only child may run: known-safe, and not destructive. */
+export function isSafeCommand(command: string): boolean {
+  return !BASH_DESTRUCTIVE.some(pattern => pattern.test(command)) && BASH_SAFE.some(pattern => pattern.test(command));
 }
 
 /**
@@ -85,22 +121,32 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
   }
 
   /**
-   * Read-only, enforced twice.
+   * The inherited allowlist, enforced twice.
    *
-   * The parent already passes a tool allowlist, and this says the same thing
-   * from inside, where it also holds for a tool that arrives some other way.
+   * The parent already passes `--tools`, and this says the same thing from
+   * inside, where it also holds for a tool that arrives some other way.
    * A blocked call is not the end of the job: the child is told to report the
    * blocker instead, because a child killed mid-task reports nothing at all,
    * and the whole point of a blocker is that it reaches the parent.
    */
+  const inherited = env.PI_SUBAGENTS_TOOLS?.split(',').filter(Boolean);
+  const allowed = inherited ?? (mayDelegate ? [...CHILD_TOOLS, DELEGATE_TOOL] : CHILD_TOOLS);
+  /** A set without edit and write is a reader, and so is its shell. */
+  const writer = allowed.includes('edit') || allowed.includes('write');
   pi.on('tool_call', (event: any, ctx: any) => {
     const tool = String(event?.toolName ?? '');
-    const allowed = mayDelegate ? [...CHILD_TOOLS, DELEGATE_TOOL] : CHILD_TOOLS;
     if (!allowed.includes(tool)) {
       return {
         block: true,
-        reason: `${tool} is not available here. This session can ${READ_ONLY_TOOLS.join(', ')} and `
-          + `nothing else. If the work needs more than reading, call ${REPORT_TOOL} with it as a blocker.`,
+        reason: `${tool} is not available here. This session can ${allowed.join(', ')} and `
+          + `nothing else. If the work needs more than that, call ${REPORT_TOOL} with it as a blocker.`,
+      };
+    }
+    if (tool === 'bash' && !writer && !isSafeCommand(String(event?.input?.command ?? ''))) {
+      return {
+        block: true,
+        reason: 'This session is read-only, and that command is not a read-only one. If the work '
+          + `needs it, call ${REPORT_TOOL} with it as a blocker.`,
       };
     }
     const root = String(ctx?.cwd ?? process.cwd());

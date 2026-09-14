@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DELEGATE_TOOL, REPORT_TOOL, type Role } from './schema.ts';
+import { DELEGATE_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, type Role } from './schema.ts';
 
 /**
  * What a child is told, and what it is allowed to be told.
@@ -113,6 +113,17 @@ export const roleBrief = (role: Role): string => ROLE_BRIEF[role];
  * with no person watching it must be told that asking is free and that waiting
  * is not, or it will sit on a blocker until a timeout kills it.
  */
+/** The one line each well-known tool gets; anything else is named as given. */
+const TOOL_BLURB: Record<string, string> = {
+  read: 'read — open a file under the working directory.',
+  grep: 'grep — search file contents under the working directory.',
+  find: 'find — find files by name under the working directory.',
+  ls: 'ls — list a directory under the working directory.',
+  bash: 'bash — run commands from the working directory.',
+  edit: 'edit — change a file under the working directory.',
+  write: 'write — create or replace a file under the working directory.',
+};
+
 export function childPrompt(input: {
   name: string;
   role: Role;
@@ -121,13 +132,15 @@ export function childPrompt(input: {
   context?: string;
   /** When false or omitted, the delegate tool does not exist in this process. */
   canDelegate?: boolean;
+  /** The pi tools this child was given. Omitted means the read-only set. */
+  tools?: readonly string[];
 }): string {
   const context = input.context?.trim();
+  const inherited = input.tools ?? READ_ONLY_TOOLS;
+  /** A child with edit or write is a worker; without them, a reader. */
+  const writer = inherited.includes('edit') || inherited.includes('write');
   const tools = [
-    'read — open a file under the working directory.',
-    'grep — search file contents.',
-    'find — find files by name.',
-    'ls — list a directory.',
+    ...inherited.map(name => TOOL_BLURB[name] ?? `${name} — inherited from the session that asked.`),
     `${REPORT_TOOL} — return the report and end. This is the only way anything you learn leaves this process.`,
     ...(input.canDelegate
       ? [`${DELEGATE_TOOL} — ask the parent to start another reader beside you. It reports to the parent, not to you. Do not wait.`]
@@ -144,7 +157,11 @@ export function childPrompt(input: {
     '',
     ...tools.map(line => `- ${line}`),
     '',
-    'You do not have write, edit, bash, or any agent_* tool.',
+    writer
+      ? 'You have the same tools as the session that asked, minus delegation and team tools. '
+        + 'Every path stays under the working directory you were given; the fence cannot be talked around.'
+      : 'You do not have write, edit, or an unrestricted shell: bash answers read-only commands only. '
+        + 'You do not have any agent_* tool.',
     '',
     'Work out the acceptance criteria yourself, from the task below, before you open anything. '
     + 'Report every criterion as met, not met, or unknown, each with the evidence for it — file and '

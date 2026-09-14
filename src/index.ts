@@ -11,7 +11,7 @@ import { getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
 import { spawnRunner } from './runner.ts';
-import { ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger } from './schema.ts';
+import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger } from './schema.ts';
 
 /**
  * pi-subagents: ephemeral subagents a session delegates to, usable on their
@@ -77,6 +77,21 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const available = typeof registry?.getAvailable === 'function' ? registry.getAvailable() : [];
     const scoped = ((context as any).scopedModels ?? []).map((entry: any) => entry?.model).filter(Boolean);
     return eligible({ available, scoped });
+  };
+
+  /**
+   * The tools a child inherits: whatever this session may use right now, minus
+   * this package's own parent tools — a child asks for children through the
+   * guard, never through agent_delegate. In plan mode the active set is
+   * already read-only, so a child born there is a reader too, and its shell
+   * is held to read-only commands by the guard.
+   */
+  const inheritedTools = (): string[] => {
+    try {
+      return pi.getActiveTools().filter(name => name !== 'agent_delegate' && name !== 'agent_jobs');
+    } catch {
+      return [...READ_ONLY_TOOLS];
+    }
   };
 
   /** A model a job may run on: the one asked for, or this session's own. */
@@ -150,6 +165,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     if ('refused' in model) return { ok: false, text: model.refused };
     const decision = await jobs.delegate({
       role: ask.role, subject: ask.subject, task: ask.task, context: ask.context,
+      // A grandchild inherits what its parent was given, never more.
+      ...(parent.tools ? { tools: parent.tools } : {}),
       ...model, cwd: parent.cwd, depth: parent.depth + 1, parentJobId: parent.id,
       ...(parent.rootId ? { rootId: parent.rootId } : {}),
     });
@@ -236,7 +253,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         const rootId = activeRoot();
         const decision = await jobs.delegate({
           role: input.role, subject: input.subject, task: input.task, context: input.context,
-          ...model, cwd: dir.cwd, depth: 0,
+          ...model, cwd: dir.cwd, depth: 0, tools: inheritedTools(),
           // The same call twice admits one job, not a second identical child.
           key: toolCallId,
           ...(rootId ? { rootId } : {}),

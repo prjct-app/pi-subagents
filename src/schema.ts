@@ -138,6 +138,11 @@ export type Job = {
   provider: string;
   modelId: string;
   cwd: string;
+  /**
+   * The pi tools this child may call, inherited from the parent's active set
+   * at admission. Absent means the original promise: read-only.
+   */
+  tools?: string[];
   state: JobState;
   /** The mailbox thread this job belongs to, when it was born inside one. */
   rootId?: string;
@@ -162,6 +167,9 @@ export type Job = {
 type moment_ = number;
 
 export const JobSchema = Type.Object({
+  // The pi tools this child may call, captured from the parent's active set at
+  // admission. Absent on jobs admitted before the inheritance existed: those
+  // stay read-only, which is what they were promised.
   id,
   role: enumOf(...ROLES),
   name: Type.String({ minLength: 1, maxLength: 48 }),
@@ -171,6 +179,7 @@ export const JobSchema = Type.Object({
   provider: Type.String({ minLength: 1, maxLength: 128 }),
   modelId: Type.String({ minLength: 1, maxLength: 128 }),
   cwd: Type.String({ minLength: 1, maxLength: 4096 }),
+  tools: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 32 })),
   state: enumOf(...JOB_STATES),
   rootId: Type.Optional(id),
   parentJobId: Type.Optional(id),

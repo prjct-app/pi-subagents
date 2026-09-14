@@ -71,7 +71,7 @@ test('a child is told its task and what it was handed, and nothing else', () => 
   assert.match(prompt, /^- ls —/m);
   assert.match(prompt, new RegExp(`- ${REPORT_TOOL} —`));
   assert.doesNotMatch(prompt, /subagent_delegate/, 'the tool is absent, not forbidden in prose');
-  assert.match(prompt, /You do not have write, edit, bash/);
+  assert.match(prompt, /do not have write, edit, or an unrestricted shell/);
 });
 
 test('a child that may delegate is told the tool exists, and one that may not is not', () => {
@@ -109,4 +109,14 @@ test('a job is fenced to a real directory, or refused', async () => {
   await writeFile(join(root, 'a-file'), 'x');
   const file = resolveWorkDir(root, 'a-file');
   assert.equal('refused' in file, true);
+});
+
+test('a child prompt names the tools it was actually given', () => {
+  const worker = childPrompt({ name: 'Nadia', role: 'explorer', subject: 's', task: 't',
+    tools: ['read', 'grep', 'find', 'ls', 'bash', 'edit', 'write'] });
+  assert.match(worker, /edit — change a file/);
+  assert.match(worker, /same tools as the session that asked/);
+  assert.doesNotMatch(worker, /do not have write/);
+  const reader = childPrompt({ name: 'Nadia', role: 'explorer', subject: 's', task: 't' });
+  assert.match(reader, /do not have write, edit, or an unrestricted shell/);
 });

@@ -254,3 +254,9 @@ test('a settled branch is not re-settled when its parent goes', () => {
   assert.equal(find(after, child.id)?.state, 'completed', 'what finished keeps its own ending');
   assert.equal(find(after, child.id)?.settled, NOW + 1);
 });
+
+test('a job keeps the tools it was admitted with; an old job stays read-only', () => {
+  const { job } = accept(emptyLedger('s1'), { tools: ['read', 'bash', 'edit', 'write'] });
+  assert.deepEqual(job.tools, ['read', 'bash', 'edit', 'write']);
+  assert.equal(accept(emptyLedger('s2')).job.tools, undefined);
+});

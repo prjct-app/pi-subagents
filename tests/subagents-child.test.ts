@@ -146,3 +146,27 @@ test('a parent that never answers is a refusal, not a wait', () => {
   assert.equal(readAnswer('{"ok":"yes"}').ok, false, 'a shape it cannot read is a refusal too');
   assert.deepEqual(readAnswer('{"ok":true,"text":"Accepted."}'), { ok: true, text: 'Accepted.' });
 });
+
+test('a child with edit or write is a worker; its shell is unrestricted', () => {
+  const { pi, call } = fakePi();
+  installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,edit,write,subagent_report' });
+  assert.equal(call({ toolName: 'edit', input: { path: 'src/a.ts' } }, '/work'), undefined);
+  assert.equal(call({ toolName: 'bash', input: { command: 'rm -rf dist' } }, '/work'), undefined,
+    'a worker keeps the shell its parent had');
+});
+
+test('a child without edit and write is a reader, and its shell answers read-only commands only', () => {
+  const { pi, call } = fakePi();
+  installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,grep,find,ls,subagent_report' });
+  const blocked = call({ toolName: 'bash', input: { command: 'rm -rf dist' } }, '/work');
+  assert.match(String(blocked?.reason), /read-only/);
+  assert.equal(call({ toolName: 'bash', input: { command: 'git status' } }, '/work'), undefined);
+  const edit = call({ toolName: 'edit', input: { path: 'src/a.ts' } }, '/work');
+  assert.match(String(edit?.reason), /not available here/, 'edit was never in the allowlist');
+});
+
+test('without the environment list the child is read-only, as it was always promised', () => {
+  const { pi, call } = fakePi();
+  installGuard(pi, CHILD);
+  assert.match(String(call({ toolName: 'bash', input: { command: 'ls' } }, '/work')?.reason), /not available here/);
+});

@@ -45,6 +45,8 @@ export type Request = {
   provider: string;
   modelId: string;
   cwd: string;
+  /** The pi tools the child inherits. Omitted is read-only, as it always was. */
+  tools?: readonly string[];
   rootId?: string;
   parentJobId?: string;
   depth: number;
@@ -154,6 +156,7 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
     provider: request.provider,
     modelId: request.modelId,
     cwd: request.cwd,
+    ...(request.tools ? { tools: [...request.tools] } : {}),
     state: 'queued',
     depth: request.depth,
     admitted: now,

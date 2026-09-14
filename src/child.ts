@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Type } from 'typebox';
@@ -60,6 +60,34 @@ const BASH_SAFE = [
 /** A command a read-only child may run: known-safe, and not destructive. */
 export function isSafeCommand(command: string): boolean {
   return !BASH_DESTRUCTIVE.some(pattern => pattern.test(command)) && BASH_SAFE.some(pattern => pattern.test(command));
+}
+
+/** Device files a shell legitimately touches outside the tree. */
+const DEVICE = /^\/dev\//;
+/** Redirection and quoting noise around a token, stripped before judging it. */
+const strip = (token: string): string => token.replace(/^\d*>>?/, '').replace(/^['"]|['"]$/g, '');
+
+/**
+ * Whether a writer's command stays inside the tree.
+ *
+ * A child with edit and write keeps the shell its parent had, but not the
+ * parent's reach: path-looking tokens — absolute paths, `~`, and any segment
+ * of `..` — are resolved through the same symlink-aware fence as file tools,
+ * and anything that lands outside blocks the command. Substitution tricks
+ * (`$(cat /etc/passwd)`) are a known residual: the fence raises the bar, and
+ * a blocked command can always be reported as a blocker.
+ */
+export function bashWithin(root: string, command: string): boolean {
+  const base = realDeep(resolve(root));
+  return command.split(/\s+/).filter(Boolean).every(raw => {
+    const token = strip(raw);
+    const value = token.includes('=') ? token.slice(token.indexOf('=') + 1) : token;
+    if (DEVICE.test(value)) return true;
+    if (value.startsWith('~')) return false;
+    if (!value.startsWith('/') && !value.split('/').includes('..')) return true;
+    const resolved = value.startsWith('/') ? realDeep(value) : realDeep(resolve(base, value));
+    return resolved === base || resolved.startsWith(`${base}${sep}`);
+  });
 }
 
 /**
@@ -251,14 +279,24 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
           + `nothing else. If the work needs more than that, call ${REPORT_TOOL} with it as a blocker.`,
       };
     }
-    if (tool === 'bash' && !writer && !isSafeCommand(String(event?.input?.command ?? ''))) {
-      return {
-        block: true,
-        reason: 'This session is read-only, and that command is not a read-only one. If the work '
-          + `needs it, call ${REPORT_TOOL} with it as a blocker.`,
-      };
-    }
     const root = String(ctx?.cwd ?? process.cwd());
+    if (tool === 'bash') {
+      const command = String(event?.input?.command ?? '');
+      if (!writer && !isSafeCommand(command)) {
+        return {
+          block: true,
+          reason: 'This session is read-only, and that command is not a read-only one. If the work '
+            + `needs it, call ${REPORT_TOOL} with it as a blocker.`,
+        };
+      }
+      if (writer && !bashWithin(root, command)) {
+        return {
+          block: true,
+          reason: `That command reaches outside ${root}, and this session is fenced to it. If the work `
+            + `needs it, call ${REPORT_TOOL} with it as a blocker.`,
+        };
+      }
+    }
     const path = typeof event?.input?.path === 'string' ? event.input.path : undefined;
     if (contains(root, path)) return undefined;
     return {
@@ -282,17 +320,27 @@ export function readAnswer(value: unknown): DelegateAnswer {
   return { ok: answer.ok, text: answer.text };
 }
 
-const real = (path: string): string => {
-  // A path that does not exist has nothing to resolve; the tool itself will say
-  // so. What matters here is that an existing symlink cannot point out of the
-  // tree and be judged by the name it was given instead of where it leads.
-  try { return realpathSync(path); } catch { return path; }
-};
+/**
+ * The real location of a path, resolved through its nearest existing ancestor.
+ *
+ * `realpathSync` fails on a path that does not exist yet — which is exactly
+ * the case a symlink escape needs: `write` to `<root>/link/evil`, where `link`
+ * points outside, has no target to resolve, and a fallback to the literal name
+ * would judge the escape by its alias instead of where it lands. Walking up to
+ * the nearest ancestor that exists and appending what was left resolves the
+ * link even when the final segments are new.
+ */
+function realDeep(path: string): string {
+  try { return realpathSync(path); } catch { /* walk up to what exists */ }
+  const parent = dirname(path);
+  if (parent === path) return path;
+  return join(realDeep(parent), basename(path));
+}
 
 /** Whether a path the child asked for stays inside the directory it was given. */
 export function contains(root: string, path?: string): boolean {
   if (path === undefined || path.trim() === '') return true;
-  const base = real(resolve(root));
-  const target = real(resolve(base, path));
+  const base = realDeep(resolve(root));
+  const target = realDeep(resolve(base, path));
   return target === base || target.startsWith(`${base}${sep}`);
 }

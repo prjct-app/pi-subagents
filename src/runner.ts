@@ -297,6 +297,14 @@ export function spawnRunner(options: {
           return { ok: false, text: 'That request was not understood. It needs a provider and a modelId.' };
         }
         const wanted = ask as ModelAsk;
+        // The catalogue is the closed list this session was given — a scoped
+        // session scopes its children too, and a name outside the list is not
+        // a model, whatever asked for it.
+        const known = options.catalogue?.();
+        if (known && !known.some(choice => choice.provider === wanted.provider && choice.modelId === wanted.modelId)) {
+          return { ok: false, text: `${wanted.provider}/${wanted.modelId} is not a model this session has. `
+            + 'Ask for the list, choose from it, or keep the model you have.' };
+        }
         const chosen = await within(START_DEADLINE_MS,
           send({ type: 'set_model', provider: wanted.provider, modelId: wanted.modelId }),
           { success: false, error: 'it never answered' } as Record<string, unknown>);

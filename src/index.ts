@@ -76,6 +76,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     widget: undefined as string | undefined,
     /** Auto-delegation: the toggle, and whether a triage call is in flight. */
     auto: { enabled: autoFromEnv(), inFlight: false },
+    /** Set on shutdown: nothing admits a child into a session that is leaving. */
+    closed: false,
   };
 
   const ctx = (): ExtensionContext => {
@@ -239,9 +241,11 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
    */
   const triageAndLaunch = async (prompt: string, context: ExtensionContext): Promise<void> => {
     const jobs = state.jobs;
-    if (!jobs) return;
+    if (!jobs || state.closed) return;
     const plan = parseTriage(await complete(TRIAGE_SYSTEM, `Working directory: ${context.cwd}\n\nTask:\n${prompt}`, context));
-    if (!plan.complex) return;
+    // The triage call outlives nothing: a shutdown that landed while it ran
+    // must not find a fresh child beside a session that is gone.
+    if (!plan.complex || state.closed) return;
     const launched: Job[] = [];
     for (const subtask of plan.subtasks.slice(0, AUTO_MAX)) {
       // The session's own model to start; the child chooses from there.
@@ -460,7 +464,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
    * immediately and the triage runs beside the turn it started.
    */
   pi.on('input', (event: any, context: ExtensionContext) => {
-    if (!state.auto.enabled || state.auto.inFlight) return undefined;
+    if (!state.auto.enabled || state.auto.inFlight || state.closed) return undefined;
     if (event?.source !== 'interactive' || !worthTriaging(String(event?.text ?? ''))) return undefined;
     state.auto.inFlight = true;
     void triageAndLaunch(String(event.text), context)
@@ -486,6 +490,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   pi.on('session_start', async (event: any, context: ExtensionContext) => {
     state.ctx = context;
+    state.closed = false;
     state.widget = undefined;
     // The toggle survives a reload as a session entry, like the ledger does.
     const pref = context.sessionManager.getBranch()
@@ -515,6 +520,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   // Quit, reload, or one session replacing another: whichever it is, the
   // processes belonged to the session that is going, and they go with it.
   pi.on('session_shutdown', async () => {
+    // Closed first: a triage in flight checks it before admitting anything.
+    state.closed = true;
     stopTicking();
     await state.jobs?.close('The session that owned this ended.').catch(() => undefined);
   });

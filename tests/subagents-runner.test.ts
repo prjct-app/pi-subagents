@@ -512,3 +512,19 @@ test('steer rides a running child, starts an idle one, and never reaches a repor
   await until('it settled', () => run.events.some(event => event.type === 'settled'));
   assert.equal(await handle.steer?.('more words'), false);
 });
+
+test('a child cannot switch to a model the session was not given', async () => {
+  const catalogue = () => [
+    { provider: 'openai-codex', modelId: 'gpt-5.4-mini', key: 'openai-codex/gpt-5.4-mini', label: 'gpt-5.4-mini', in: 0.25, out: 2, window: 400_000, reasoning: true },
+  ];
+  const run = await started({ depth: 0 }, live, { catalogue });
+  await until('it is running', () => run.events.some(event => event.type === 'running'));
+  const before = run.child.sent.filter((message: any) => message.type === 'set_model').length;
+  run.child.say({ type: 'extension_ui_request', id: 'm9', method: 'input',
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'use_model', provider: 'anthropic', modelId: 'claude-opus-4-5' })}` });
+  await until('the refusal is answered', () => replies(run.child).length > 0);
+  assert.equal(JSON.parse(replies(run.child)[0].value).ok, false);
+  assert.match(JSON.parse(replies(run.child)[0].value).text, /not a model this session has/);
+  assert.equal(run.child.sent.filter((message: any) => message.type === 'set_model').length, before,
+    'a scoped session scopes its children: no set_model left the parent');
+});

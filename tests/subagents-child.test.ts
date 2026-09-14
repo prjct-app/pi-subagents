@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { contains, installGuard, readAnswer } from '../src/child.ts';
+import { bashWithin, contains, installGuard, readAnswer } from '../src/child.ts';
 import { ASK_PREFIX, DELEGATE_TOOL, READ_ONLY_TOOLS, REPORT_TOOL } from '../src/schema.ts';
 
 /** The slice of the host a guard touches, and nothing else. */
@@ -223,4 +223,39 @@ test('the ask tool is always armed, and sends the question up enveloped', async 
   const answer = await ask.execute('c1', { question: 'is the legacy format in scope?' }, undefined, undefined, ctx);
   assert.deepEqual(JSON.parse(seen[0].slice(seen[0].indexOf(':') + 1)), { kind: 'ask', question: 'is the legacy format in scope?' });
   assert.match(answer.content[0].text, /do not wait/i);
+});
+
+test('a writer cannot reach outside the tree through a symlink whose target is new', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-link-'));
+  const outside = await mkdtemp(join(tmpdir(), 'pi-subagents-out-'));
+  try {
+    await mkdir(join(root, 'dir'), { recursive: true });
+    await symlink(outside, join(root, 'dir', 'link'));
+    assert.equal(contains(root, 'dir/link/evil.ts'), false,
+      'the alias is judged by where it lands, not by its name');
+    assert.equal(contains(root, 'dir/new-file.ts'), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('a writer\'s shell stays inside the tree: absolute paths, ~, and .. are fenced', () => {
+  assert.equal(bashWithin('/work', 'cat /etc/passwd'), false);
+  assert.equal(bashWithin('/work', 'cat ~/secrets'), false);
+  assert.equal(bashWithin('/work', 'cd ../.. && ls'), false);
+  assert.equal(bashWithin('/work', 'cat ../../etc/passwd'), false);
+  assert.equal(bashWithin('/work', 'cp src/a.ts /tmp/b.ts'), false);
+  assert.equal(bashWithin('/work', 'out=/tmp/x npm test'), false, 'env-style assignments are judged too');
+  assert.equal(bashWithin('/work', 'cat src/a.ts > /dev/null'), true, 'devices are not the tree but are not a leak');
+  assert.equal(bashWithin('/work', 'git diff main..feat'), true, 'a range is not a parent traversal');
+  assert.equal(bashWithin('/work', 'node scripts/build.js && echo done'), true);
+});
+
+test('the guard applies the shell fence for writers, not just the allowlist for readers', () => {
+  const { pi, call } = fakePi();
+  installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,edit,write,subagent_report' });
+  assert.match(String(call({ toolName: 'bash', input: { command: 'cat /etc/passwd' } }, '/work')?.reason),
+    /fenced/, 'an absolute path outside is blocked even for a writer');
+  assert.equal(call({ toolName: 'bash', input: { command: 'cat src/a.ts' } }, '/work'), undefined);
 });

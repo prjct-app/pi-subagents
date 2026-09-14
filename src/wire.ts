@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rmdir } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rmdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { plain } from './text.ts';
 
@@ -30,13 +30,22 @@ const MAX_MESSAGE_BYTES = 16 * 1024;
 
 export const wireFile = (root: string, tree: string): string => join(root, `agent-${tree}.wire.jsonl`);
 
-/** Serialise one file operation behind the lock directory beside the file. */
+/**
+ * Serialise one file operation behind the lock directory beside the file.
+ *
+ * A writer that died holding the lock leaves it behind, and a lock nobody
+ * reclaims wedges the wire forever. No writer holds it for more than a few
+ * milliseconds, so a lock older than LOCK_MS is stale by definition: it is
+ * removed and the operation retried, once per pass.
+ */
 async function locked<T>(file: string, work: () => Promise<T>): Promise<T> {
   const lock = `${file}.lock`;
   const deadline = Date.now() + LOCK_MS;
   while (true) {
     const acquired = await mkdir(lock, { recursive: false }).then(() => true, () => false);
     if (acquired) break;
+    const stale = await stat(lock).then(info => Date.now() - info.mtimeMs > LOCK_MS, () => false);
+    if (stale) { await rmdir(lock).catch(() => undefined); continue; }
     if (Date.now() > deadline) throw new Error('The wire is wedged: its lock outlived five seconds.');
     await new Promise(resolve => setTimeout(resolve, 25));
   }
@@ -53,7 +62,15 @@ export async function post(root: string, tree: string, message: WireMessage): Pr
   });
   if (Buffer.byteLength(line) > MAX_MESSAGE_BYTES) return false;
   const file = wireFile(root, tree);
-  await locked(file, () => appendFile(file, `${line}\n`, 'utf8'));
+  await locked(file, async () => {
+    // A writer that died mid-append left a torn tail; appending after it would
+    // merge the new frame into the fragment and lose both. The fragment gets
+    // its own dead line — a reader skips what it cannot parse — and the new
+    // message starts clean on the next one.
+    const existing = await readFile(file, 'utf8').catch(() => '');
+    const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+    await appendFile(file, `${prefix}${line}\n`, 'utf8');
+  });
   return true;
 }
 

@@ -348,3 +348,17 @@ test('a question from a grandchild goes to its parent job first, who answers on 
   assert.equal(h.sent.some(item => item.message.customType === 'agents-ask'), false,
     'the session is not bothered while a live parent can answer');
 });
+
+test('a shutdown mid-triage admits no child into a session that is leaving', async () => {
+  let release: (value: string) => void = () => undefined;
+  const h = host({ complete: () => new Promise<string>(resolve => { release = resolve; }) });
+  await h.emit('session_start', { reason: 'startup' });
+  await h.commands.get('agents').handler('auto on', h.ctx);
+  const prompt = `Rework the store and the runner together. ${'Detail. '.repeat(30)}`;
+  await h.emit('input', { text: prompt, source: 'interactive' });
+  // The triage is still in flight when the session starts closing.
+  await h.emit('session_shutdown');
+  release('{"complex": true, "subtasks": [{"role": "explorer", "subject": "map it", "task": "Read src/."}]}');
+  await settleTick(); await settleTick();
+  assert.equal(h.runs.size, 0, 'no orphan: the closed flag stopped the admission');
+});

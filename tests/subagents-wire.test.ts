@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -56,4 +56,22 @@ test('an oversized message is refused, and recent bounds what a pull returns', a
   const last = await recent(root, 't1', 'Omar');
   assert.equal(last.length, 20);
   assert.equal(last.at(-1)?.id, 'm24');
+});
+
+test('a post after a torn tail starts clean, and a stale lock is reclaimed', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-wire-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await post(root, 't1', message({ id: 'a' }));
+  // A writer dies mid-append, then dies again holding the lock.
+  await appendFile(wireFile(root, 't1'), '{"id":"torn"');
+  await mkdir(wireFile(root, 't1') + '.lock');
+  const { utimes } = await import('node:fs/promises');
+  const old = new Date(Date.now() - 60_000);
+  await utimes(wireFile(root, 't1') + '.lock', old, old);
+  const started = Date.now();
+  assert.equal(await post(root, 't1', message({ id: 'b' })), true, 'the stale lock is reclaimed, not wedged');
+  assert.ok(Date.now() - started < 5_000);
+  const found = await read(root, 't1', 0, 'Omar');
+  assert.deepEqual(found.messages.map(m => m.id), ['a', 'b'],
+    'the fragment is a dead line and the new message is whole');
 });

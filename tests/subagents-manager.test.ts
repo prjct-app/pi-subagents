@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   DEFAULT_LIMITS, admit, busy, closable, descendants, emptyLedger, expired, find, live,
-  markDelivered, recover, rootOf, running, settle, startable, starting, stopping,
+  markDelivered, recover, remodel, rootOf, running, settle, startable, starting, stopping,
   undelivered, unresolved,
 } from '../src/manager.ts';
 import { distinctName, nameFor } from '../src/names.ts';
@@ -259,4 +259,12 @@ test('a job keeps the tools it was admitted with; an old job stays read-only', (
   const { job } = accept(emptyLedger('s1'), { tools: ['read', 'bash', 'edit', 'write'] });
   assert.deepEqual(job.tools, ['read', 'bash', 'edit', 'write']);
   assert.equal(accept(emptyLedger('s2')).job.tools, undefined);
+});
+
+test('a child that chooses its model changes what the job says it runs on', () => {
+  const accepted = accept(emptyLedger('s1'));
+  const next = remodel(accepted.ledger, accepted.job.id, 'anthropic', 'claude-opus-4-5');
+  assert.equal(find(next, accepted.job.id)?.modelId, 'claude-opus-4-5');
+  const closedLedger = settle(next, accepted.job.id, { kind: 'cancelled', reason: 'done' }, NOW);
+  assert.equal(remodel(closedLedger, accepted.job.id, 'x', 'y'), closedLedger, 'a settled job is not redecorated');
 });

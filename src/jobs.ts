@@ -1,6 +1,6 @@
 import {
   DEFAULT_LIMITS, admit, descendants, emptyLedger, expired, find, live, markDelivered,
-  recover, running, settle, startable, starting, stopping, undelivered,
+  recover, remodel, running, settle, startable, starting, stopping, undelivered,
   type Admission, type Limits, type Request,
 } from './manager.ts';
 import type { Handle, Runner } from './runner.ts';
@@ -95,6 +95,10 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
     const now = wiring.now();
     if (event.type === 'running') {
       commit(running(store.ledger, jobId));
+      return;
+    }
+    if (event.type === 'model') {
+      commit(remodel(store.ledger, jobId, event.provider, event.modelId));
       return;
     }
     if (event.type === 'settled') {

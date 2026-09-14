@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  MAX_CHOICES, childPrompt, choiceHint, eligible, findChoice, modelKey, resolveWorkDir, roleBrief,
+  MAX_CHOICES, childPrompt, choiceHint, eligible, findChoice, modelKey, neutralCatalogue, resolveWorkDir, roleBrief,
 } from '../src/context.ts';
 import { REPORT_TOOL } from '../src/schema.ts';
 
@@ -119,4 +119,12 @@ test('a child prompt names the tools it was actually given', () => {
   assert.doesNotMatch(worker, /do not have write/);
   const reader = childPrompt({ name: 'Nadia', role: 'explorer', subject: 's', task: 't' });
   assert.match(reader, /do not have write, edit, or an unrestricted shell/);
+});
+
+test('the catalogue a child chooses from carries facts, never advice', () => {
+  const text = neutralCatalogue(eligible({ available: CATALOGUE }));
+  assert.ok(text.indexOf('anthropic/claude-opus-4-5') < text.indexOf('openai-codex/gpt-5.4-mini'));
+  assert.doesNotMatch(text, /cheapest|most capable/i);
+  assert.match(text, /\$0.25\/\$2 per Mtok, 400k window|0\.25/);
+  assert.match(childPrompt({ name: 'Nadia', role: 'explorer', subject: 's', task: 't' }), /subagent_model/);
 });

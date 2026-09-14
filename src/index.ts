@@ -197,7 +197,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   };
 
   const build = (session: string): Jobs => makeJobs(session, {
-    runner: (options.makeRunner ?? spawnRunner)({ guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate }),
+    runner: (options.makeRunner ?? spawnRunner)({ guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate, catalogue: () => state.choices }),
     now: () => Date.now(),
     persist: ledger => { try { pi.appendEntry('agent-jobs', ledger); } catch { /* the session is closing */ } },
     onChange: ledger => {

@@ -130,7 +130,7 @@ test('delegating asks the parent, and returns what the parent actually said', as
     },
   };
 
-  const ask = { role: 'explorer', subject: 'map it', task: 'Map src/.' };
+  const ask = { kind: 'delegate', role: 'explorer', subject: 'map it', task: 'Map src/.' };
   const result = await tools.get(DELEGATE_TOOL).execute('call_1', ask, undefined, undefined, ctx);
   assert.equal(asked[0], `${ASK_PREFIX}${JSON.stringify(ask)}`, 'the parent is asked, in words it can parse');
   assert.equal(result.content[0].text, 'This tree has spent its 4 delegations.',
@@ -169,4 +169,19 @@ test('without the environment list the child is read-only, as it was always prom
   const { pi, call } = fakePi();
   installGuard(pi, CHILD);
   assert.match(String(call({ toolName: 'bash', input: { command: 'ls' } }, '/work')?.reason), /not available here/);
+});
+
+test('the model tool is armed in a child and its ask reaches the parent as JSON', async () => {
+  const { pi, tools } = fakePi();
+  installGuard(pi, CHILD);
+  const tool = tools.get('subagent_model');
+  assert.ok(tool, 'the child can choose its model');
+  const seen: string[] = [];
+  const ctx = { ui: { input: async (title: string) => { seen.push(title); return JSON.stringify({ ok: true, text: 'two models' }); } } };
+  const listed = await tool.execute('c1', { action: 'list' }, undefined, undefined, ctx);
+  assert.match(listed.content[0].text, /two models/);
+  assert.deepEqual(JSON.parse(seen[0].slice(seen[0].indexOf(':') + 1)), { kind: 'models' });
+  await tool.execute('c2', { action: 'use', provider: 'anthropic', modelId: 'claude-opus-4-5' }, undefined, undefined, ctx);
+  assert.deepEqual(JSON.parse(seen[1].slice(seen[1].indexOf(':') + 1)),
+    { kind: 'use_model', provider: 'anthropic', modelId: 'claude-opus-4-5' });
 });

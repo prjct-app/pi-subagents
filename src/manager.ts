@@ -179,6 +179,13 @@ export function starting(ledger: Ledger, jobId: string, now: number): Ledger {
   return replace(ledger, { ...job, state: 'starting', started: now });
 }
 
+/** The child chose its own model; the job says what it is actually running on. */
+export function remodel(ledger: Ledger, jobId: string, provider: string, modelId: string): Ledger {
+  const job = find(ledger, jobId);
+  if (!job || isTerminal(job.state)) return ledger;
+  return replace(ledger, { ...job, provider, modelId });
+}
+
 export function running(ledger: Ledger, jobId: string): Ledger {
   const job = find(ledger, jobId);
   if (!job || job.state !== 'starting') return ledger;

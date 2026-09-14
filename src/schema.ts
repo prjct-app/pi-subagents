@@ -52,6 +52,16 @@ export const DELEGATE_TOOL = 'subagent_delegate';
  */
 export const ASK_PREFIX = 'pi-subagents-ask:';
 
+/**
+ * The tool a child uses to see and choose its own model.
+ *
+ * The parent no longer chooses for it: a child starts on the inherited model
+ * because that start is fast, and then decides for itself, because the one
+ * doing the work is the one who knows what the work needs. The catalogue it
+ * chooses from is the machine's, not a recommendation.
+ */
+export const MODEL_TOOL = 'subagent_model';
+
 export const DelegateSchema = Type.Object({
   role: StringEnum(ROLES),
   subject: Type.String({ minLength: 1, maxLength: 160 }),
@@ -69,6 +79,24 @@ export type DelegateAsk = {
 /** What a parent answers a child that asked for help. */
 export type DelegateAnswer = { ok: boolean; text: string };
 
+/** A child switching its own model. */
+export const ModelAskSchema = Type.Object({
+  kind: Type.Literal('use_model'),
+  provider: Type.String({ minLength: 1, maxLength: 128 }),
+  modelId: Type.String({ minLength: 1, maxLength: 128 }),
+});
+export type ModelAsk = { kind: 'use_model'; provider: string; modelId: string };
+
+/** A child asking for a child, on the wire: the ask plus its kind. */
+export const DelegateEnvelopeSchema = Type.Object({
+  kind: Type.Literal('delegate'),
+  role: StringEnum(ROLES),
+  subject: Type.String({ minLength: 1, maxLength: 160 }),
+  task: Type.String({ minLength: 1, maxLength: 24000 }),
+  context: Type.Optional(Type.String({ maxLength: 24000 })),
+  model: Type.Optional(Type.String({ maxLength: 256 })),
+});
+
 /** Everything a child may do to the disk: look at it. */
 export const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls'] as const;
 /**
@@ -78,7 +106,7 @@ export const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls'] as const;
  * alike, so a child whose report tool is not named here cannot report at all —
  * it would work perfectly and then fail for having said nothing.
  */
-export const CHILD_TOOLS: readonly string[] = [...READ_ONLY_TOOLS, REPORT_TOOL];
+export const CHILD_TOOLS: readonly string[] = [...READ_ONLY_TOOLS, REPORT_TOOL, MODEL_TOOL];
 
 /**
  * Every state a job can be in. There is no state that waits forever: a job
@@ -218,6 +246,8 @@ function lazy<T>(make: () => T): () => T {
 }
 const reportValidator = lazy(() => Compile(ReportSchema));
 const askValidator = lazy(() => Compile(DelegateSchema));
+const envelopeValidator = lazy(() => Compile(DelegateEnvelopeSchema));
+const modelAskValidator = lazy(() => Compile(ModelAskSchema));
 const ledgerValidator = lazy(() => Compile(LedgerSchema));
 
 /** A report is data from a child. It is validated before it is believed. */
@@ -234,4 +264,5 @@ export function reportProblems(value: unknown): string[] {
 }
 export const checkLedger = (value: unknown): boolean => ledgerValidator().Check(value);
 /** A child asking for a child is untrusted input like any other. */
-export const checkAsk = (value: unknown): boolean => askValidator().Check(value);
+export const checkAsk = (value: unknown): boolean => envelopeValidator().Check(value);
+export const checkModelAsk = (value: unknown): boolean => modelAskValidator().Check(value);

@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DELEGATE_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, type Role } from './schema.ts';
+import { DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, type Role } from './schema.ts';
 
 /**
  * What a child is told, and what it is allowed to be told.
@@ -96,6 +96,23 @@ export function choiceHint(choices: readonly ModelChoice[]): string {
     + 'Match the model to the task: reading and mapping rarely needs the expensive one. Omit it to reuse this session’s.';
 }
 
+/**
+ * The catalogue a child chooses from: facts, one line each, alphabetical.
+ *
+ * Neutrality is the point. The parent's hint orders cheapest-first because the
+ * parent is paying; the child is working, and a recommendation it never asked
+ * for is a bias it cannot see past. It gets what each model costs and carries,
+ * and it decides.
+ */
+export function neutralCatalogue(choices: readonly ModelChoice[]): string {
+  if (choices.length === 0) return 'This machine reports no models to switch to.';
+  return choices
+    .map(choice => `${choice.key} — ${choice.label}, $${choice.in}/$${choice.out} per Mtok, `
+      + `${Math.round(choice.window / 1000)}k window${choice.reasoning ? ', reasoning' : ''}`)
+    .sort()
+    .join('\n');
+}
+
 const ROLE_BRIEF: Record<Role, string> = {
   explorer: 'You are an explorer. You map what is there — where things live, how they connect, '
     + 'what is missing — and you report it plainly. You are not asked whether any of it is good.',
@@ -142,6 +159,8 @@ export function childPrompt(input: {
   const tools = [
     ...inherited.map(name => TOOL_BLURB[name] ?? `${name} — inherited from the session that asked.`),
     `${REPORT_TOOL} — return the report and end. This is the only way anything you learn leaves this process.`,
+    `${MODEL_TOOL} — list the models this machine can run, or switch to one. You start on the model `
+      + 'the session that asked had; you are the one doing this work, so the choice is yours. Switching is instant.',
     ...(input.canDelegate
       ? [`${DELEGATE_TOOL} — ask the parent to start another reader beside you. It reports to the parent, not to you. Do not wait.`]
       : []),

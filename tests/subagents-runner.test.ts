@@ -148,7 +148,7 @@ test('the child starts with ambient discovery off, and able to read and to repor
     '--no-extensions', '-e', '/owned/guard.ts',
     '--no-skills', '--no-prompt-templates',
     '--no-approve',
-    '--tools', `read,grep,find,ls,${REPORT_TOOL}`,
+    '--tools', `read,grep,find,ls,${REPORT_TOOL},subagent_model`,
   ]);
   // `--tools` is an allowlist over extension tools too, so a report tool left
   // out of it is a child that works perfectly and then fails for saying nothing.
@@ -362,7 +362,7 @@ test('a child that asks for a child gets its parent’s real answer', async () =
 
   child.say({
     type: 'extension_ui_request', id: 'dialog-1', method: 'input',
-    title: `${ASK_PREFIX}${JSON.stringify({ role: 'explorer', subject: 'map it', task: 'Map src/.' })}`,
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'delegate', role: 'explorer', subject: 'map it', task: 'Map src/.' })}`,
   });
   await until('the parent answers', () => replies(child).length > 0);
 
@@ -377,12 +377,12 @@ test('a refusal reaches the child as an answer, never as a broken dialog', async
   const { child } = await delegating({ depth: 0 }, async () => { throw new Error('the ledger is full'); });
   child.say({
     type: 'extension_ui_request', id: 'dialog-2', method: 'input',
-    title: `${ASK_PREFIX}${JSON.stringify({ role: 'explorer', subject: 'map it', task: 'Map src/.' })}`,
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'delegate', role: 'explorer', subject: 'map it', task: 'Map src/.' })}`,
   });
   await until('the parent answers', () => replies(child).length > 0);
   assert.equal(JSON.parse(replies(child)[0].value).ok, false);
 
-  child.say({ type: 'extension_ui_request', id: 'dialog-3', method: 'input', title: `${ASK_PREFIX}{"role":"writer"}` });
+  child.say({ type: 'extension_ui_request', id: 'dialog-3', method: 'input', title: `${ASK_PREFIX}{"kind":"delegate","role":"writer"}` });
   await until('the bad one is answered too', () => replies(child).length > 1);
   assert.match(JSON.parse(replies(child)[1].value).text, /was not understood, so nothing was started/);
 });
@@ -400,4 +400,41 @@ test('a child cannot make its parent prompt a person who is not there', async ()
   child.say({ type: 'extension_ui_request', id: 'dialog-6', method: 'input', title: `${ASK_PREFIX}{}` });
   await until('the one that blocks is answered', () => replies(child).length > 1);
   assert.deepEqual(replies(child).map(reply => reply.id), ['dialog-4', 'dialog-6']);
+});
+
+test('a child sees the catalogue without a recommendation, and switches its own model', async () => {
+  const catalogue = () => [
+    { provider: 'anthropic', modelId: 'claude-opus-4-5', key: 'anthropic/claude-opus-4-5', label: 'claude-opus-4-5', in: 5, out: 25, window: 200_000, reasoning: true },
+    { provider: 'openai-codex', modelId: 'gpt-5.4-mini', key: 'openai-codex/gpt-5.4-mini', label: 'gpt-5.4-mini', in: 0.25, out: 2, window: 400_000, reasoning: true },
+  ];
+  const run = await started({ depth: 0 }, live, { catalogue });
+  await until('it is running', () => run.events.some(event => event.type === 'running'));
+
+  run.child.say({ type: 'extension_ui_request', id: 'm1', method: 'input', title: `${ASK_PREFIX}{"kind":"models"}` });
+  await until('the catalogue is answered', () => replies(run.child).length > 0);
+  const list = JSON.parse(replies(run.child)[0].value);
+  assert.equal(list.ok, true);
+  assert.ok(list.text.indexOf('anthropic/claude-opus-4-5') < list.text.indexOf('openai-codex/gpt-5.4-mini'),
+    'alphabetical: the order carries no recommendation');
+  assert.match(list.text, /\$5\/\$25 per Mtok/, 'the facts are there; the advice is not');
+  assert.doesNotMatch(list.text, /cheapest|most capable/i);
+
+  run.child.say({ type: 'extension_ui_request', id: 'm2', method: 'input',
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'use_model', provider: 'anthropic', modelId: 'claude-opus-4-5' })}` });
+  // The switch is a second set_model — not the one from startup — which the
+  // child answers like the first.
+  await until('the runner asks for the switch',
+    () => run.child.sent.filter((message: any) => message.type === 'set_model').length >= 2);
+  run.child.answer('set_model', { success: true });
+  await until('the switch is answered', () => replies(run.child).length > 1);
+  assert.deepEqual(JSON.parse(replies(run.child)[1].value), { ok: true, text: 'You are now running on anthropic/claude-opus-4-5.' });
+  assert.ok(run.child.sent.some((message: any) => message.type === 'set_model'
+    && message.provider === 'anthropic' && message.modelId === 'claude-opus-4-5'),
+    'the switch is the one-millisecond command, not a restart');
+  assert.ok(run.events.some(event => event.type === 'model' && event.modelId === 'claude-opus-4-5'),
+    'and the job says what it is running on');
+
+  run.child.say({ type: 'extension_ui_request', id: 'm3', method: 'input', title: `${ASK_PREFIX}{"kind":"use_model","provider":"x"}` });
+  await until('the bad one is answered', () => replies(run.child).length > 2);
+  assert.equal(JSON.parse(replies(run.child)[2].value).ok, false);
 });

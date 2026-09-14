@@ -1,8 +1,10 @@
 import { realpathSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { StringEnum } from '@earendil-works/pi-ai';
+import { Type } from 'typebox';
 import {
-  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, READ_ONLY_TOOLS, REPORT_TOOL,
+  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   ReportSchema, checkReport, reportProblems, type DelegateAnswer,
 } from './schema.ts';
 
@@ -113,12 +115,38 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
         // model here: a local “accepted” that the parent then refuses is worse
         // than a refusal, because the work is planned around a child that does
         // not exist.
-        const answered = await ctx?.ui?.input?.(`${ASK_PREFIX}${JSON.stringify(input)}`, undefined, { timeout: ASK_MS });
+        const answered = await ctx?.ui?.input?.(`${ASK_PREFIX}${JSON.stringify({ kind: 'delegate', ...(input as object) })}`, undefined, { timeout: ASK_MS });
         const answer = readAnswer(answered);
         return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
       },
     } as Parameters<ExtensionAPI['registerTool']>[0]);
   }
+
+  /**
+   * The child's own choice of model. The catalogue is the machine's and the
+   * switch is the runner's one-millisecond command; what the child gets back
+   * is an answer, never a recommendation.
+   */
+  pi.registerTool({
+    name: MODEL_TOOL,
+    label: 'Choose your model',
+    description: 'List the models this machine can run, or switch this session to one. You start on '
+      + 'the model the session that asked had. Choose by the task in front of you: reading and '
+      + 'mapping rarely need the expensive one, judgement does. Switching is instant.',
+    parameters: Type.Object({
+      action: StringEnum(['list', 'use'] as const),
+      provider: Type.Optional(Type.String({ maxLength: 128 })),
+      modelId: Type.Optional(Type.String({ maxLength: 128 })),
+    }),
+    async execute(_toolCallId: string, input: any, _signal: unknown, _onUpdate: unknown, ctx: any) {
+      const ask = input?.action === 'use'
+        ? { kind: 'use_model', provider: String(input?.provider ?? ''), modelId: String(input?.modelId ?? '') }
+        : { kind: 'models' };
+      const answered = await ctx?.ui?.input?.(`${ASK_PREFIX}${JSON.stringify(ask)}`, undefined, { timeout: ASK_MS });
+      const answer = readAnswer(answered);
+      return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
+    },
+  } as Parameters<ExtensionAPI['registerTool']>[0]);
 
   /**
    * The inherited allowlist, enforced twice.

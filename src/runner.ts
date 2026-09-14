@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
-import { childPrompt } from './context.ts';
+import { childPrompt, neutralCatalogue, type ModelChoice } from './context.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
 import {
-  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, checkAsk,
-  type DelegateAnswer, type DelegateAsk, type Job, type Usage,
+  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, checkAsk, checkModelAsk,
+  type DelegateAnswer, type DelegateAsk, type Job, type ModelAsk, type Usage,
 } from './schema.ts';
 
 /**
@@ -29,7 +29,9 @@ export type RunnerEvent =
   /** Terminal. It ended without a report, died, or the transport broke. */
   | { type: 'failed'; reason: string; usage?: Usage }
   /** Diagnostic. The terminal event above is what settles a job, not this. */
-  | { type: 'exit'; code: number | null };
+  | { type: 'exit'; code: number | null }
+  /** The child chose its own model; the job should say what it is running on. */
+  | { type: 'model'; provider: string; modelId: string };
 
 export type Handle = {
   /** Ask it to stop, then make sure it stopped. Safe to call twice. */
@@ -175,6 +177,8 @@ export function spawnRunner(options: {
   depth?: number;
   /** Answers a child that asks for a child. Absent means delegation is off. */
   onDelegate?: (parent: Job, ask: DelegateAsk) => Promise<DelegateAnswer>;
+  /** The models a child may switch to. Absent means it keeps what it has. */
+  catalogue?: () => ModelChoice[];
   /** Injected so tests never reach for a real binary. */
   spawnProcess?: typeof spawn;
 }): Runner {
@@ -191,7 +195,7 @@ export function spawnRunner(options: {
      * tools ride along; a test can still widen the whole set via options.
      */
     const inherited = options.tools ?? job.tools ?? READ_ONLY_TOOLS;
-    const tools = [...new Set([...inherited, REPORT_TOOL, ...(mayDelegate ? [DELEGATE_TOOL] : [])])];
+    const tools = [...new Set([...inherited, REPORT_TOOL, MODEL_TOOL, ...(mayDelegate ? [DELEGATE_TOOL] : [])])];
     const launch = invoke(childArgs(options.guardPath, tools));
     const child: ChildProcess = start(launch.command, launch.args, {
       cwd: job.cwd,
@@ -260,6 +264,29 @@ export function spawnRunner(options: {
         if (payload.length > MAX_ASK_BYTES) return undefined;
         try { return JSON.parse(payload); } catch { return undefined; }
       })();
+      const kind = (ask as { kind?: unknown } | undefined)?.kind;
+      if (kind === 'models') {
+        return { ok: true, text: neutralCatalogue(options.catalogue?.() ?? []) };
+      }
+      if (kind === 'use_model') {
+        if (!checkModelAsk(ask)) {
+          return { ok: false, text: 'That request was not understood. It needs a provider and a modelId.' };
+        }
+        const wanted = ask as ModelAsk;
+        const chosen = await within(START_DEADLINE_MS,
+          send({ type: 'set_model', provider: wanted.provider, modelId: wanted.modelId }),
+          { success: false, error: 'it never answered' } as Record<string, unknown>);
+        if (chosen.success !== true) {
+          return { ok: false, text: `Could not switch to ${wanted.provider}/${wanted.modelId}: `
+            + `${String(chosen.error ?? 'no reason given').slice(0, 200)}. Carry on with the model you have.` };
+        }
+        emit({ type: 'model', provider: wanted.provider, modelId: wanted.modelId });
+        return { ok: true, text: `You are now running on ${wanted.provider}/${wanted.modelId}.` };
+      }
+      if (kind !== 'delegate') {
+        return { ok: false, text: 'That request was not understood, so nothing was started. '
+          + 'It needs a kind: delegate, models, or use_model.' };
+      }
       if (!options.onDelegate || !mayDelegate) {
         return { ok: false, text: 'Delegation is not available from here. Report what you found and what you could not reach.' };
       }

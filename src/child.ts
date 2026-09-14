@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { realpathSync, readlinkSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { StringEnum } from '@earendil-works/pi-ai';
@@ -84,7 +84,10 @@ export function bashWithin(root: string, command: string): boolean {
     const value = token.includes('=') ? token.slice(token.indexOf('=') + 1) : token;
     if (DEVICE.test(value)) return true;
     if (value.startsWith('~')) return false;
-    if (!value.startsWith('/') && !value.split('/').includes('..')) return true;
+    // Only a token that can name a path is judged — anything with a separator
+    // or a lone `..` — and relative paths resolve against the fenced
+    // directory, so a relative symlink is judged by where it lands too.
+    if (!value.includes('/') && value !== '..') return true;
     const resolved = value.startsWith('/') ? realDeep(value) : realDeep(resolve(base, value));
     return resolved === base || resolved.startsWith(`${base}${sep}`);
   });
@@ -289,7 +292,9 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
             + `needs it, call ${REPORT_TOOL} with it as a blocker.`,
         };
       }
-      if (writer && !bashWithin(root, command)) {
+      // A safe command name is not a safe path: cat reads /etc/passwd as
+      // happily as it reads the tree, so readers and writers alike are fenced.
+      if (!bashWithin(root, command)) {
         return {
           block: true,
           reason: `That command reaches outside ${root}, and this session is fenced to it. If the work `
@@ -330,11 +335,17 @@ export function readAnswer(value: unknown): DelegateAnswer {
  * the nearest ancestor that exists and appending what was left resolves the
  * link even when the final segments are new.
  */
-function realDeep(path: string): string {
-  try { return realpathSync(path); } catch { /* walk up to what exists */ }
+function realDeep(path: string, hops = 0): string {
+  // A loop of symlinks has no answer; the kernel will refuse it too (ELOOP).
+  if (hops > 40) return path;
+  try { return realpathSync(path); } catch { /* fall through */ }
+  // A dangling symlink has no realpath, but it still has a target: judge the
+  // path by where the link points, never by the name it was given.
+  try { return realDeep(resolve(dirname(path), readlinkSync(path)), hops + 1); }
+  catch { /* not a symlink: keep walking up */ }
   const parent = dirname(path);
   if (parent === path) return path;
-  return join(realDeep(parent), basename(path));
+  return join(realDeep(parent, hops + 1), basename(path));
 }
 
 /** Whether a path the child asked for stays inside the directory it was given. */

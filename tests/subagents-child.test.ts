@@ -259,3 +259,63 @@ test('the guard applies the shell fence for writers, not just the allowlist for 
     /fenced/, 'an absolute path outside is blocked even for a writer');
   assert.equal(call({ toolName: 'bash', input: { command: 'cat src/a.ts' } }, '/work'), undefined);
 });
+
+test('a dangling symlink is judged by where it points, existing or not', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-dangle-'));
+  const outside = join(tmpdir(), 'pi-subagents-nowhere-' + Date.now());
+  try {
+    await mkdir(join(root, 'dir'), { recursive: true });
+    // The link points outside, to a target that does not even exist yet.
+    await symlink(outside, join(root, 'dir', 'dangling'));
+    assert.equal(contains(root, 'dir/dangling/evil.ts'), false,
+      'a name is never the verdict; where it lands is');
+    // A dangling link pointing back inside is not an escape.
+    await symlink(join(root, 'newdir'), join(root, 'dir', 'inside'));
+    assert.equal(contains(root, 'dir/inside/new-file.ts'), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a symlink loop is refused by the kernel\'s own rule, not by hanging', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-loop-'));
+  try {
+    await symlink(join(root, 'b'), join(root, 'a'));
+    await symlink(join(root, 'a'), join(root, 'b'));
+    const start = Date.now();
+    contains(root, 'a/x');
+    assert.ok(Date.now() - start < 1_000, 'resolution is capped, never a hang');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a reader is held to the path fence too: cat reads the tree, never /etc', () => {
+  const { pi, call } = fakePi();
+  installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,grep,find,ls,subagent_report' });
+  assert.match(String(call({ toolName: 'bash', input: { command: 'cat /etc/passwd' } }, '/work')?.reason),
+    /fenced/, 'a safe command name is not a safe path');
+  assert.equal(call({ toolName: 'bash', input: { command: 'cat src/a.ts' } }, '/work'), undefined);
+});
+
+test('a writer cannot reach out through a relative symlink in a command', () => {
+  assert.equal(bashWithin('/work', 'cat dir/link/evil'), true,
+    'the token itself is not the verdict — but with no symlink there, it stays inside');
+  assert.equal(bashWithin('/work', 'cat ./src/a.ts'), true);
+  assert.equal(bashWithin('/work', 'head -20 ../outside/x'), false);
+});
+
+test('a writer is fenced through a relative symlink on disk', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-bashlink-'));
+  const outside = await mkdtemp(join(tmpdir(), 'pi-subagents-out2-'));
+  try {
+    await mkdir(join(root, 'dir'), { recursive: true });
+    await symlink(outside, join(root, 'dir', 'link'));
+    assert.equal(bashWithin(root, 'cat dir/link/evil'), false,
+      'the command is judged by where the path lands');
+    assert.equal(bashWithin(root, 'cat dir/file.ts'), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});

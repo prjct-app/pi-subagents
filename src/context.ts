@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, type Role } from './schema.ts';
+import { DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, type Role } from './schema.ts';
 
 /**
  * What a child is told, and what it is allowed to be told.
@@ -151,6 +151,8 @@ export function childPrompt(input: {
   canDelegate?: boolean;
   /** The pi tools this child was given. Omitted means the read-only set. */
   tools?: readonly string[];
+  /** When true, the sibling channel tools exist in this process. */
+  wired?: boolean;
 }): string {
   const context = input.context?.trim();
   const inherited = input.tools ?? READ_ONLY_TOOLS;
@@ -163,6 +165,10 @@ export function childPrompt(input: {
       + 'the session that asked had; you are the one doing this work, so the choice is yours. Switching is instant.',
     ...(input.canDelegate
       ? [`${DELEGATE_TOOL} — ask the parent to start another reader beside you. It reports to the parent, not to you. Do not wait.`]
+      : []),
+    ...(input.wired
+      ? [`${WIRE_SEND_TOOL} / ${WIRE_INBOX_TOOL} — reach a sibling by name, or all with "*". `
+        + 'Coordination, not conversation: say what you found or what you need, once, then get back to work.']
       : []),
   ];
   return [

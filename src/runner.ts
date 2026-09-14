@@ -2,9 +2,11 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { childPrompt, neutralCatalogue, type ModelChoice } from './context.ts';
+import { read as readWire } from './wire.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
 import {
-  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, checkAsk, checkModelAsk,
+  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
+  WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk,
   type DelegateAnswer, type DelegateAsk, type Job, type ModelAsk, type Usage,
 } from './schema.ts';
 
@@ -179,6 +181,10 @@ export function spawnRunner(options: {
   onDelegate?: (parent: Job, ask: DelegateAsk) => Promise<DelegateAnswer>;
   /** The models a child may switch to. Absent means it keeps what it has. */
   catalogue?: () => ModelChoice[];
+  /** Where wire files live. Absent means siblings cannot reach each other. */
+  wireRoot?: string;
+  /** How often sibling mail is polled. Injected by the tests; 2s in life. */
+  wireMs?: number;
   /** Injected so tests never reach for a real binary. */
   spawnProcess?: typeof spawn;
 }): Runner {
@@ -195,7 +201,11 @@ export function spawnRunner(options: {
      * tools ride along; a test can still widen the whole set via options.
      */
     const inherited = options.tools ?? job.tools ?? READ_ONLY_TOOLS;
-    const tools = [...new Set([...inherited, REPORT_TOOL, MODEL_TOOL, ...(mayDelegate ? [DELEGATE_TOOL] : [])])];
+    const wired = options.wireRoot !== undefined && job.wire !== undefined;
+    const tools = [...new Set([...inherited, REPORT_TOOL, MODEL_TOOL,
+      ...(mayDelegate ? [DELEGATE_TOOL] : []),
+      ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : []),
+    ])];
     const launch = invoke(childArgs(options.guardPath, tools));
     const child: ChildProcess = start(launch.command, launch.args, {
       cwd: job.cwd,
@@ -210,11 +220,18 @@ export function spawnRunner(options: {
         // arrived some other way is held to it too.
         PI_SUBAGENTS_TOOLS: tools.join(','),
         ...(mayDelegate ? { PI_SUBAGENTS_CAN_DELEGATE: '1' } : {}),
+        ...(wired ? {
+          PI_SUBAGENTS_WIRE: job.wire as string,
+          PI_SUBAGENTS_WIRE_ROOT: options.wireRoot as string,
+          PI_SUBAGENTS_ALIAS: job.name,
+        } : {}),
       },
     });
 
     const pending: Pending = new Map();
     const claimed = new Map<string, unknown>();
+    /** Sibling-mail forwarding state, declared before any terminal path runs. */
+    const forward = { offset: 0, spent: 0, timer: undefined as ReturnType<typeof setInterval> | undefined };
     const state = {
       seq: 0, stderr: '',
       report: undefined as unknown,
@@ -302,6 +319,7 @@ export function spawnRunner(options: {
     /** At most one terminal event, whichever cause gets there first. */
     const terminal = (event: RunnerEvent): void => {
       if (state.done) return;
+      if (forward.timer) { clearInterval(forward.timer); forward.timer = undefined; }
       // A stop already owns the reason (timeout, cancel). An abort makes the
       // child emit agent_settled without a report; that must not overwrite
       // "the clock ran out" with "ended without reporting".
@@ -451,13 +469,46 @@ export function spawnRunner(options: {
      * the prompt was taken, not that the work is done.
      */
     const taken = await within(START_DEADLINE_MS,
-      send({ type: 'prompt', message: childPrompt({ ...job, canDelegate: mayDelegate }) }),
+      send({ type: 'prompt', message: childPrompt({ ...job, canDelegate: mayDelegate, wired }) }),
       { success: false, error: 'it never answered' } as Record<string, unknown>);
     if (taken.success !== true) {
       const why = String(taken.error ?? 'no reason given').slice(0, 200);
       terminal({ type: 'failed', reason: `The child would not take the task: ${why}` });
       void stop('task refused');
       return { stop };
+    }
+
+    /**
+     * Sibling mail, pushed. Each message for this child is steered in once,
+     * tracked by byte offset so a reload of the loop repeats nothing, and a
+     * per-child budget cuts a ping-pong loop off instead of feeding it.
+     * Everything is best-effort: the file keeps what a steer could not
+     * deliver, and the child's own subagent_inbox can still read it.
+     */
+    const FORWARD_BUDGET = 24;
+    if (wired) {
+      const root = options.wireRoot as string;
+      const tree = job.wire as string;
+      const poll = (): void => {
+        void readWire(root, tree, forward.offset, job.name).then(async found => {
+          forward.offset = found.offset;
+          for (const message of found.messages) {
+            if (forward.spent >= FORWARD_BUDGET || state.done) return;
+            if (message.from === job.name) continue;
+            forward.spent += 1;
+            await send({
+              type: 'steer',
+              message: `Message from ${message.from}, a sibling working beside you on the same task:\n`
+                + `${message.subject}\n${message.body}\nAnswer it with subagent_send if it needs one; then get back to your task.`,
+            });
+          }
+        }).catch(() => undefined);
+      };
+      // Once now — mail posted while the child was starting is still mail —
+      // then on the interval.
+      poll();
+      forward.timer = setInterval(poll, options.wireMs ?? 2_000);
+      forward.timer.unref?.();
     }
 
     emit({ type: 'running' });

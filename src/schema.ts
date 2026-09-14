@@ -62,6 +62,16 @@ export const ASK_PREFIX = 'pi-subagents-ask:';
  */
 export const MODEL_TOOL = 'subagent_model';
 
+/**
+ * The sibling channel: one file per delegation tree, no membership.
+ *
+ * A child reaches the others by the names the ledger gave them, and '*'.
+ * There is no 'parent' address: a question for the hierarchy travels the ask
+ * channel, not the wire, because the wire is between equals.
+ */
+export const WIRE_SEND_TOOL = 'subagent_send';
+export const WIRE_INBOX_TOOL = 'subagent_inbox';
+
 export const DelegateSchema = Type.Object({
   role: StringEnum(ROLES),
   subject: Type.String({ minLength: 1, maxLength: 160 }),
@@ -174,6 +184,8 @@ export type Job = {
   state: JobState;
   /** The mailbox thread this job belongs to, when it was born inside one. */
   rootId?: string;
+  /** The delegation tree's wire: siblings reach each other through it. */
+  wire?: string;
   /** Who admitted it. Absent on a job the session itself delegated. */
   parentJobId?: string;
   depth: number;
@@ -210,6 +222,8 @@ export const JobSchema = Type.Object({
   tools: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 32 })),
   state: enumOf(...JOB_STATES),
   rootId: Type.Optional(id),
+  /** The delegation tree's wire file. Every job in a tree shares one. */
+  wire: Type.Optional(id),
   parentJobId: Type.Optional(id),
   depth: Type.Integer({ minimum: 0, maximum: 8 }),
   key: Type.Optional(id),

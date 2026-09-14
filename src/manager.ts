@@ -48,6 +48,8 @@ export type Request = {
   /** The pi tools the child inherits. Omitted is read-only, as it always was. */
   tools?: readonly string[];
   rootId?: string;
+  /** The tree's wire. A root gets its own id, so every tree has one. */
+  wire?: string;
   parentJobId?: string;
   depth: number;
   /** The tool call that asked. The same one twice admits one job. */
@@ -161,6 +163,9 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
     depth: request.depth,
     admitted: now,
     ...(request.rootId ? { rootId: request.rootId } : {}),
+    // A root names its tree after itself; a child inherits its parent's wire,
+    // so the whole tree talks on one file and no tree shares another's.
+    wire: request.wire ?? id,
     ...(request.parentJobId ? { parentJobId: request.parentJobId } : {}),
     ...(request.key ? { key: request.key } : {}),
   };

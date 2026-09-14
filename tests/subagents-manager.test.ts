@@ -268,3 +268,10 @@ test('a child that chooses its model changes what the job says it runs on', () =
   const closedLedger = settle(next, accepted.job.id, { kind: 'cancelled', reason: 'done' }, NOW);
   assert.equal(remodel(closedLedger, accepted.job.id, 'x', 'y'), closedLedger, 'a settled job is not redecorated');
 });
+
+test('a root names its tree after itself, and a child inherits the wire', () => {
+  const first = accept(emptyLedger('s1'));
+  assert.equal(first.job.wire, first.job.id);
+  const second = accept(first.ledger, { parentJobId: first.job.id, depth: 1, wire: first.job.wire });
+  assert.equal(second.job.wire, first.job.id, 'the whole tree talks on one file');
+});

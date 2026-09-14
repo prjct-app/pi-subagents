@@ -3,10 +3,12 @@ import { resolve, sep } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Type } from 'typebox';
+import { randomUUID } from 'node:crypto';
 import {
   ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
-  ReportSchema, checkReport, reportProblems, type DelegateAnswer,
+  ReportSchema, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkReport, reportProblems, type DelegateAnswer,
 } from './schema.ts';
+import { post, recent } from './wire.ts';
 
 /**
  * The only extension a child loads.
@@ -147,6 +149,61 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
       return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
     },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
+
+  /**
+   * The sibling channel. Armed only when the runner wired this child into a
+   * tree: the tools are in the allowlist, and the file they speak through is
+   * named by the environment. The send budget is the anti-loop brake on this
+   * side: colleagues coordinate, they do not converse forever.
+   */
+  const wire = env.PI_SUBAGENTS_WIRE;
+  const wireRoot = env.PI_SUBAGENTS_WIRE_ROOT;
+  const alias = env.PI_SUBAGENTS_ALIAS ?? 'me';
+  if (wire && wireRoot) {
+    const budget = { left: 12 };
+    pi.registerTool({
+      name: WIRE_SEND_TOOL,
+      label: 'Message a sibling',
+      description: 'Send a message to a sibling working beside you on the same task, by name, or '
+        + '"*" for all of them. Coordination, not conversation: say what you found or what you need, '
+        + 'once. There is no parent address here — a question for the hierarchy goes through the ask channel.',
+      parameters: Type.Object({
+        to: Type.String({ minLength: 1, maxLength: 48 }),
+        subject: Type.String({ minLength: 1, maxLength: 160 }),
+        body: Type.String({ minLength: 1, maxLength: 8000 }),
+      }),
+      async execute(_toolCallId: string, input: any) {
+        if (budget.left <= 0) {
+          throw new Error('You have spent your messages for this task. Report what you have, with what '
+            + 'you still need named as a blocker.');
+        }
+        budget.left -= 1;
+        const posted = await post(wireRoot, wire, {
+          id: `w_${randomUUID().replaceAll('-', '')}`, from: alias, to: String(input.to),
+          subject: String(input.subject), body: String(input.body), at: Date.now(),
+        });
+        if (!posted) throw new Error('That message is too large for the wire. Send less.');
+        return {
+          content: [{ type: 'text' as const, text: `Sent to ${String(input.to)}. ${budget.left} message${budget.left === 1 ? '' : 's'} left. Do not wait for an answer; it arrives by itself.` }],
+          details: { to: input.to },
+        };
+      },
+    } as Parameters<ExtensionAPI['registerTool']>[0]);
+    pi.registerTool({
+      name: WIRE_INBOX_TOOL,
+      label: 'Read sibling messages',
+      description: 'Read the last messages your siblings sent you. Pushed messages also arrive by '
+        + 'themselves while you work; this is for checking what you might have missed.',
+      parameters: Type.Object({}),
+      async execute() {
+        const messages = await recent(wireRoot, wire, alias);
+        const text = messages.length === 0
+          ? 'No messages from your siblings.'
+          : messages.map(message => `${message.from} · ${message.subject}\n${message.body}`).join('\n---\n');
+        return { content: [{ type: 'text' as const, text }], details: { count: messages.length } };
+      },
+    } as Parameters<ExtensionAPI['registerTool']>[0]);
+  }
 
   /**
    * The inherited allowlist, enforced twice.

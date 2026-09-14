@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { childArgs, frames, spawnRunner, type RunnerEvent } from '../src/runner.ts';
@@ -437,4 +440,30 @@ test('a child sees the catalogue without a recommendation, and switches its own 
   run.child.say({ type: 'extension_ui_request', id: 'm3', method: 'input', title: `${ASK_PREFIX}{"kind":"use_model","provider":"x"}` });
   await until('the bad one is answered', () => replies(run.child).length > 2);
   assert.equal(JSON.parse(replies(run.child)[2].value).ok, false);
+});
+
+test('a wired child gets the wire in its environment and its sibling mail steered in', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-wire-run-'));
+  const run = await started({ depth: 0, wire: 'tree-1' }, live, { wireRoot: root, wireMs: 25 });
+  await until('it is running', () => run.events.some(event => event.type === 'running'));
+  assert.equal(run.env.PI_SUBAGENTS_ALIAS, 'Nadia');
+  assert.ok(run.env.PI_SUBAGENTS_WIRE, 'the tree names the file');
+  assert.ok(run.args.at(-1)?.includes('subagent_send'), 'the wire tools are in the allowlist');
+
+  const { post } = await import('../src/wire.ts');
+  await post(root, run.env.PI_SUBAGENTS_WIRE, {
+    id: 'w1', from: 'Omar', to: 'Nadia', subject: 'found it', body: 'the race is in pump()', at: 1,
+  });
+  const deadline = Date.now() + 2_000;
+  while (!run.child.sent.some((message: any) => message.type === 'steer')) {
+    assert.ok(Date.now() < deadline, 'the message is steered in');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const steered = run.child.sent.filter((message: any) => message.type === 'steer');
+  assert.match(steered[0].message, /Omar/);
+  assert.match(steered[0].message, /the race is in pump\(\)/);
+  // Nothing repeats: the offset moved past what was delivered.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(run.child.sent.filter((message: any) => message.type === 'steer').length, 1);
+  await rm(root, { recursive: true, force: true });
 });

@@ -185,3 +185,30 @@ test('the model tool is armed in a child and its ask reaches the parent as JSON'
   assert.deepEqual(JSON.parse(seen[1].slice(seen[1].indexOf(':') + 1)),
     { kind: 'use_model', provider: 'anthropic', modelId: 'claude-opus-4-5' });
 });
+
+test('the wire tools arm only inside a wired child, and the send budget is spent', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-wire-guard-'));
+  try {
+    const { pi, tools } = fakePi();
+    installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_WIRE: 'tree-1', PI_SUBAGENTS_WIRE_ROOT: root, PI_SUBAGENTS_ALIAS: 'Ada' });
+    const send = tools.get('subagent_send');
+    const inbox = tools.get('subagent_inbox');
+    assert.ok(send && inbox, 'a wired child can reach its siblings');
+    await send.execute('c1', { to: '*', subject: 'the store', body: 'state flows down' });
+    const seen = await inbox.execute('c2', {});
+    assert.match(seen.content[0].text, /state flows down/, 'a broadcast is readable by the sender too');
+    for (const i of Array.from({ length: 11 }, (_, i) => i)) {
+      await send.execute(`c${i + 3}`, { to: 'Omar', subject: `s${i}`, body: 'x' });
+    }
+    await assert.rejects(() => send.execute('c14', { to: 'Omar', subject: 's', body: 'x' }),
+      /spent your messages/, 'the budget is the anti-loop brake');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an unwired child has no wire tools at all', () => {
+  const { tools } = (() => { const f = fakePi(); installGuard(f.pi, CHILD); return f; })();
+  assert.equal(tools.get('subagent_send'), undefined);
+  assert.equal(tools.get('subagent_inbox'), undefined);
+});

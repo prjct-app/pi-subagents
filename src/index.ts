@@ -13,6 +13,8 @@ import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
 import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
 import { spawnRunner } from './runner.ts';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger } from './schema.ts';
 
 /**
@@ -39,6 +41,8 @@ export type JobsOptions = {
   makeRunner?: typeof spawnRunner;
   /** Injected by the tests; the real one asks the cheapest model on the registry. */
   complete?: (system: string, user: string, ctx: ExtensionContext) => Promise<string>;
+  /** Injected by the tests; the real one lives beside the agent directory. */
+  wireRoot?: string;
   tickMs?: number;
 };
 
@@ -177,8 +181,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     if ('refused' in model) return { ok: false, text: model.refused };
     const decision = await jobs.delegate({
       role: ask.role, subject: ask.subject, task: ask.task, context: ask.context,
-      // A grandchild inherits what its parent was given, never more.
+      // A grandchild inherits what its parent was given, never more — tools,
+      // and the wire: the whole tree talks on one file.
       ...(parent.tools ? { tools: parent.tools } : {}),
+      ...(parent.wire ? { wire: parent.wire } : {}),
       ...model, cwd: parent.cwd, depth: parent.depth + 1, parentJobId: parent.id,
       ...(parent.rootId ? { rootId: parent.rootId } : {}),
     });
@@ -266,7 +272,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   };
 
   const build = (session: string): Jobs => makeJobs(session, {
-    runner: (options.makeRunner ?? spawnRunner)({ guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate, catalogue: () => state.choices }),
+    runner: (options.makeRunner ?? spawnRunner)({
+      guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate, catalogue: () => state.choices,
+      wireRoot: options.wireRoot ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'), 'agents'),
+    }),
     now: () => Date.now(),
     persist: ledger => { try { pi.appendEntry('agent-jobs', ledger); } catch { /* the session is closing */ } },
     onChange: ledger => {

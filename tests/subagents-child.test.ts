@@ -212,3 +212,15 @@ test('an unwired child has no wire tools at all', () => {
   assert.equal(tools.get('subagent_send'), undefined);
   assert.equal(tools.get('subagent_inbox'), undefined);
 });
+
+test('the ask tool is always armed, and sends the question up enveloped', async () => {
+  const { pi, tools } = fakePi();
+  installGuard(pi, CHILD);
+  const ask = tools.get('subagent_ask');
+  assert.ok(ask, 'every child can ask its parent');
+  const seen: string[] = [];
+  const ctx = { ui: { input: async (title: string) => { seen.push(title); return JSON.stringify({ ok: true, text: 'Sent. Do not wait.' }); } } };
+  const answer = await ask.execute('c1', { question: 'is the legacy format in scope?' }, undefined, undefined, ctx);
+  assert.deepEqual(JSON.parse(seen[0].slice(seen[0].indexOf(':') + 1)), { kind: 'ask', question: 'is the legacy format in scope?' });
+  assert.match(answer.content[0].text, /do not wait/i);
+});

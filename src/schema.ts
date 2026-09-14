@@ -72,6 +72,22 @@ export const MODEL_TOOL = 'subagent_model';
 export const WIRE_SEND_TOOL = 'subagent_send';
 export const WIRE_INBOX_TOOL = 'subagent_inbox';
 
+/**
+ * A question for the hierarchy, not the wire.
+ *
+ * A child that is stuck on a decision that is not its own asks its parent —
+ * or the parent asks the grandparent, up to the session that launched the
+ * tree. It never blocks on the answer: the ack is immediate and the answer
+ * arrives by itself, steered back down.
+ */
+export const ASK_TOOL = 'subagent_ask';
+
+/** A child's question, on the wire to its parent. */
+export const QuestionAskSchema = Type.Object({
+  kind: Type.Literal('ask'),
+  question: Type.String({ minLength: 1, maxLength: 2000 }),
+});
+
 export const DelegateSchema = Type.Object({
   role: StringEnum(ROLES),
   subject: Type.String({ minLength: 1, maxLength: 160 }),
@@ -116,7 +132,7 @@ export const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls'] as const;
  * alike, so a child whose report tool is not named here cannot report at all —
  * it would work perfectly and then fail for having said nothing.
  */
-export const CHILD_TOOLS: readonly string[] = [...READ_ONLY_TOOLS, REPORT_TOOL, MODEL_TOOL];
+export const CHILD_TOOLS: readonly string[] = [...READ_ONLY_TOOLS, REPORT_TOOL, MODEL_TOOL, ASK_TOOL];
 
 /**
  * Every state a job can be in. There is no state that waits forever: a job
@@ -262,6 +278,7 @@ const reportValidator = lazy(() => Compile(ReportSchema));
 const askValidator = lazy(() => Compile(DelegateSchema));
 const envelopeValidator = lazy(() => Compile(DelegateEnvelopeSchema));
 const modelAskValidator = lazy(() => Compile(ModelAskSchema));
+const questionAskValidator = lazy(() => Compile(QuestionAskSchema));
 const ledgerValidator = lazy(() => Compile(LedgerSchema));
 
 /** A report is data from a child. It is validated before it is believed. */
@@ -280,3 +297,4 @@ export const checkLedger = (value: unknown): boolean => ledgerValidator().Check(
 /** A child asking for a child is untrusted input like any other. */
 export const checkAsk = (value: unknown): boolean => envelopeValidator().Check(value);
 export const checkModelAsk = (value: unknown): boolean => modelAskValidator().Check(value);
+export const checkQuestionAsk = (value: unknown): boolean => questionAskValidator().Check(value);

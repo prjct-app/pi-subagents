@@ -74,6 +74,9 @@ function fakeChild() {
       if (message.type === 'abort') {
         child.say({ type: 'response', command: 'abort', id: message.id, success: true });
       }
+      if (message.type === 'steer') {
+        child.say({ type: 'response', command: 'steer', id: message.id, success: false, error: 'not streaming' });
+      }
       if (message.type === 'prompt') {
         // Acceptance only: a real child answers that it took the work, never
         // that it did it. `refuses` plays the child that will not take it.
@@ -151,7 +154,7 @@ test('the child starts with ambient discovery off, and able to read and to repor
     '--no-extensions', '-e', '/owned/guard.ts',
     '--no-skills', '--no-prompt-templates',
     '--no-approve',
-    '--tools', `read,grep,find,ls,${REPORT_TOOL},subagent_model`,
+    '--tools', `read,grep,find,ls,${REPORT_TOOL},subagent_model,subagent_ask`,
   ]);
   // `--tools` is an allowlist over extension tools too, so a report tool left
   // out of it is a child that works perfectly and then fails for saying nothing.
@@ -466,4 +469,46 @@ test('a wired child gets the wire in its environment and its sibling mail steere
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(run.child.sent.filter((message: any) => message.type === 'steer').length, 1);
   await rm(root, { recursive: true, force: true });
+});
+
+test('a child question climbs to whoever the session says, and the ack says not to wait', async () => {
+  const asked: { job: string; question: string }[] = [];
+  const run = await started({ depth: 0 }, live, {
+    onAsk: async (job: Job, question: string) => {
+      asked.push({ job: job.id, question });
+      return { ok: true, text: 'Sent to the session that launched you. The answer arrives by itself; do not wait for it.' };
+    },
+  });
+  await until('it is running', () => run.events.some(event => event.type === 'running'));
+  run.child.say({ type: 'extension_ui_request', id: 'q1', method: 'input',
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'ask', question: 'is the legacy format in scope?' })}` });
+  await until('the parent is asked', () => replies(run.child).length > 0);
+  assert.equal(asked.length, 1);
+  assert.ok(asked[0].job.length > 0, 'the question carries which job asked');
+  assert.equal(asked[0].question, 'is the legacy format in scope?');
+  assert.match(JSON.parse(replies(run.child)[0].value).text, /do not wait/);
+
+  // Without an answerer the child is told to report, never left waiting.
+  const alone = await started({ depth: 0 }, live, {});
+  await until('it is running', () => alone.events.some(event => event.type === 'running'));
+  alone.child.say({ type: 'extension_ui_request', id: 'q2', method: 'input',
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'ask', question: 'anyone?' })}` });
+  await until('the refusal is answered', () => replies(alone.child).length > 0);
+  assert.match(JSON.parse(replies(alone.child)[0].value).text, /no one to ask|Report what blocks you/);
+});
+
+test('steer rides a running child, starts an idle one, and never reaches a reported one', async () => {
+  const run = await started({}, live);
+  await until('it is running', () => run.events.some(event => event.type === 'running'));
+  const handle = run.handle;
+
+  // The steer is refused (not streaming), so a prompt starts the turn instead.
+  assert.equal(await handle.steer?.('words'), true);
+  assert.ok(run.child.sent.some((message: any) => message.type === 'steer'));
+  assert.ok(run.child.sent.some((message: any) => message.type === 'prompt' && message.message === 'words'));
+
+  // Reported: the session is over, and its report already said what it knew.
+  run.child.report({ outcome: 'completed', summary: 'done', criteria: [], findings: [], blockers: [] });
+  await until('it settled', () => run.events.some(event => event.type === 'settled'));
+  assert.equal(await handle.steer?.('more words'), false);
 });

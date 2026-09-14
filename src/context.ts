@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, type Role } from './schema.ts';
+import { ASK_TOOL, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, type Role } from './schema.ts';
 
 /**
  * What a child is told, and what it is allowed to be told.
@@ -163,6 +163,8 @@ export function childPrompt(input: {
     `${REPORT_TOOL} — return the report and end. This is the only way anything you learn leaves this process.`,
     `${MODEL_TOOL} — list the models this machine can run, or switch to one. You start on the model `
       + 'the session that asked had; you are the one doing this work, so the choice is yours. Switching is instant.',
+    `${ASK_TOOL} — ask whoever asked for your work when a decision is not yours. The answer arrives `
+      + 'by itself; never wait for it. Carry on, or report the question as a blocker.',
     ...(input.canDelegate
       ? [`${DELEGATE_TOOL} — ask the parent to start another reader beside you. It reports to the parent, not to you. Do not wait.`]
       : []),
@@ -198,8 +200,9 @@ export function childPrompt(input: {
     + 'evidence against it.',
     '',
     'If you cannot finish — something outside the working directory, a decision that is not yours, '
-    + 'anything that needs writing or running — stop and report it as a blocker, naming exactly what '
-    + 'you need to continue. Do not look for a way around it, and do not wait for anyone.',
+    + `anything beyond the tools you have — ask with ${ASK_TOOL} when an answer would unblock you, `
+    + 'and report it as a blocker either way, naming exactly what you need to continue. '
+    + 'Do not look for a way around it, and do not wait for anyone.',
     '',
     `Calling ${REPORT_TOOL} ends this session. Nothing else you write here is read by anyone. `
     + 'Report once, and report it whole.',

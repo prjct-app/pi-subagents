@@ -19,7 +19,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   const renderers = new Map<string, any>();
   const entries: { customType: string; data: any }[] = [];
   const sent: { message: any; options: any }[] = [];
-  const runs = new Map<string, { job: Job; emit: (event: RunnerEvent) => void; stops: string[] }>();
+  const runs = new Map<string, { job: Job; emit: (event: RunnerEvent) => void; stops: string[]; steers: string[] }>();
   const session = { idle: true };
 
   const commands = new Map<string, any>();
@@ -54,10 +54,13 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
 
   /** A runner that spawns nothing and hands the test the child's voice. */
   const makeRunner = ((given: any): Runner => async (job, emit) => {
-    const run = { job, emit, stops: [] as string[] };
+    const run = { job, emit, stops: [] as string[], steers: [] as string[] };
     runs.set(job.id, run);
     made.push(given);
-    const handle: Handle = { stop: async reason => { run.stops.push(reason); } };
+    const handle: Handle = {
+      stop: async reason => { run.stops.push(reason); },
+      steer: async message => { run.steers.push(message); return true; },
+    };
     return handle;
   }) as any;
   const made: any[] = [];
@@ -297,4 +300,51 @@ test('a reload restores the auto toggle from the session', async () => {
   await again.emit('session_start', { reason: 'reload' });
   await again.commands.get('agents').handler('auto', again.ctx);
   assert.match(again.notices.at(-1) ?? '', /is on/);
+});
+
+test('a question from a root job reaches the session, and agent_reply steers the answer back', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'startup' });
+  const delegated = await h.delegate();
+  const job = delegated.details as Job;
+
+  // The runner's onAsk is wired through the ledger: no parent job, so the
+  // session itself is asked.
+  const given = h.made[0];
+  const answer = await given.onAsk(job, 'is the legacy format in scope?');
+  assert.equal(answer.ok, true);
+  const asked = h.sent.find(item => item.message.customType === 'agents-ask');
+  assert.ok(asked, 'the session is told who asks and what');
+  assert.match(asked.message.content, /agent_reply/);
+  assert.match(asked.message.content, /is the legacy format in scope\?/);
+
+  const reply = await h.tools.get('agent_reply').execute('call_r', { name: job.name, answer: 'No, rewrite it.' });
+  assert.match(reply.content[0].text, /Answered/);
+  assert.deepEqual(h.of(job).steers, ['The session that launched you answers: No, rewrite it.']);
+
+  await assert.rejects(() => h.tools.get('agent_reply').execute('call_r2', { name: 'Nobody', answer: 'x' }),
+    /No live subagent named/);
+});
+
+test('a question from a grandchild goes to its parent job first, who answers on the wire', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'startup' });
+  const parent = (await h.delegate()).details as Job;
+  const parentRun = h.of(parent);
+  // The parent delegates in turn, the way the runner's onDelegate does.
+  const childDecision = await h.made[0].onDelegate(parent, {
+    role: 'explorer', subject: 'map the store', task: 'Read src/store/.',
+  });
+  assert.equal(childDecision.ok, true);
+  const child = [...h.runs.values()].map(run => run.job).find(job => job.parentJobId === parent.id);
+  assert.ok(child, 'the grandchild is in the ledger under its parent');
+
+  const given = h.made[0];
+  const answer = await given.onAsk(child, 'which format wins?');
+  assert.match(answer.text, /Sent to .*, who asked for your work/);
+  assert.equal(parentRun.steers.length, 1, 'the parent job hears the question');
+  assert.match(parentRun.steers[0], /which format wins\?/);
+  assert.match(parentRun.steers[0], /subagent_send/, 'and is told to answer on the wire');
+  assert.equal(h.sent.some(item => item.message.customType === 'agents-ask'), false,
+    'the session is not bothered while a live parent can answer');
 });

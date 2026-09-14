@@ -5,7 +5,7 @@ import { StringEnum } from '@earendil-works/pi-ai';
 import { Type } from 'typebox';
 import { randomUUID } from 'node:crypto';
 import {
-  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
+  ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   ReportSchema, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkReport, reportProblems, type DelegateAnswer,
 } from './schema.ts';
 import { post, recent } from './wire.ts';
@@ -145,6 +145,30 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
         ? { kind: 'use_model', provider: String(input?.provider ?? ''), modelId: String(input?.modelId ?? '') }
         : { kind: 'models' };
       const answered = await ctx?.ui?.input?.(`${ASK_PREFIX}${JSON.stringify(ask)}`, undefined, { timeout: ASK_MS });
+      const answer = readAnswer(answered);
+      return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
+    },
+  } as Parameters<ExtensionAPI['registerTool']>[0]);
+
+  /**
+   * A question for whoever asked for this work. The ack is immediate and the
+   * answer is steered back down by itself: a child that waits on its question
+   * is a stalled job, so the tool tells it not to.
+   */
+  pi.registerTool({
+    name: ASK_TOOL,
+    label: 'Ask your parent',
+    description: 'Ask whoever asked for your work when you are stuck on a decision that is not '
+      + 'yours. The question travels up the delegation tree; the answer arrives by itself. Never '
+      + 'wait for it: carry on with what you can, and if nothing can continue without the answer, '
+      + `call ${REPORT_TOOL} with the question as a blocker.`,
+    parameters: Type.Object({
+      question: Type.String({ minLength: 1, maxLength: 2000 }),
+    }),
+    async execute(_toolCallId: string, input: any, _signal: unknown, _onUpdate: unknown, ctx: any) {
+      const answered = await ctx?.ui?.input?.(
+        `${ASK_PREFIX}${JSON.stringify({ kind: 'ask', question: String(input?.question ?? '') })}`,
+        undefined, { timeout: ASK_MS });
       const answer = readAnswer(answered);
       return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
     },

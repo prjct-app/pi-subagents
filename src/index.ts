@@ -271,9 +271,41 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     } catch { /* the session is closing */ }
   };
 
+  /**
+   * A child's question climbs the tree one level at a time. A live parent job
+   * hears it as a steer and answers on the wire; a question with no parent job
+   * left belongs to this session, whose model answers with agent_reply. Either
+   * way the child is told the same thing: it was sent, do not wait for it.
+   */
+  const onAsk = async (job: Job, question: string): Promise<DelegateAnswer> => {
+    const jobs = state.jobs;
+    if (!jobs) return { ok: false, text: 'The question could not be sent. Report what blocks you instead.' };
+    const parent = job.parentJobId ? find(jobs.ledger(), job.parentJobId) : undefined;
+    if (parent && !isTerminal(parent.state)) {
+      const sent = await jobs.steerTo(parent.id,
+        `Your delegated child ${plain(job.name)} (${plain(job.subject)}) asks: ${plain(question)}\n`
+        + `Answer on the wire with subagent_send to "${job.name}". If the answer is not yours to give, ask your own parent with subagent_ask.`);
+      if (sent) {
+        return { ok: true, text: `Sent to ${parent.name}, who asked for your work. The answer arrives by itself; do not wait for it.` };
+      }
+    }
+    const context = state.ctx;
+    if (context) {
+      try {
+        pi.sendMessage({
+          customType: 'agents-ask', display: true, details: { job, question },
+          content: `${plain(job.name)} — a subagent this session launched (${plain(job.subject)}) — asks: ${plain(question)}\n`
+            + `Answer with the agent_reply tool (name: "${job.name}"). If the answer is not yours to give, say so in the answer.`,
+        }, context.isIdle() ? { triggerTurn: true, deliverAs: 'followUp' } : { deliverAs: 'steer' });
+        return { ok: true, text: 'Sent to the session that launched you. The answer arrives by itself; do not wait for it.' };
+      } catch { /* the session is closing */ }
+    }
+    return { ok: false, text: 'There is no one to ask right now. Report what blocks you instead.' };
+  };
+
   const build = (session: string): Jobs => makeJobs(session, {
     runner: (options.makeRunner ?? spawnRunner)({
-      guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate, catalogue: () => state.choices,
+      guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate, onAsk, catalogue: () => state.choices,
       wireRoot: options.wireRoot ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'), 'agents'),
     }),
     now: () => Date.now(),
@@ -398,6 +430,31 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return ledgerView(result?.details, expanded, theme); },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
 
+  pi.registerTool({
+    name: 'agent_reply',
+    label: 'Answer a subagent',
+    description: 'Answer a question a subagent escalated to this session, naming it as the question '
+      + 'named it. The answer is steered into the subagent, which was told not to wait — so answer '
+      + 'once, plainly, and if the decision is not yours either, say that instead.',
+    parameters: Type.Object({
+      name: Type.String({ minLength: 1, maxLength: 48 }),
+      answer: Type.String({ minLength: 1, maxLength: 4000 }),
+    }),
+    async execute(_toolCallId: string, input: any) {
+      const jobs = state.jobs;
+      const job = jobs?.ledger().jobs.find(candidate => candidate.name === input.name && !isTerminal(candidate.state));
+      if (!jobs || !job) {
+        throw new Error(`No live subagent named "${input.name}". If it already reported, its report has what it knew.`);
+      }
+      const sent = await jobs.steerTo(job.id, `The session that launched you answers: ${input.answer}`);
+      if (!sent) throw new Error(`${input.name} is not reachable any more. Its report stands on its own.`);
+      return { content: [{ type: 'text' as const, text: `Answered ${input.name}. Carry on with your own work.` }], details: { name: input.name } };
+    },
+    renderCall(args: any, theme: any) {
+      return new Text(`${theme.fg('toolTitle', theme.bold('▸ reply'))} ${theme.fg('muted', String(args?.name ?? ''))}`, 0, 0);
+    },
+  } as Parameters<ExtensionAPI['registerTool']>[0]);
+
   /**
    * Auto-delegation never delays the prompt it watches: the handler returns
    * immediately and the triage runs beside the turn it started.
@@ -410,6 +467,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       .catch(() => undefined)
       .finally(() => { state.auto.inFlight = false; });
     return undefined;
+  });
+
+  pi.registerMessageRenderer<{ job?: Job; question?: string }>('agents-ask', (message, { expanded }, theme) => {
+    const job = message.details?.job;
+    const heading = theme.fg('toolTitle', theme.bold(`▸ ${plain(job?.name ?? 'a subagent')} asks`))
+      + ` ${theme.fg('muted', plain(job?.subject ?? ''))}`;
+    if (!expanded) return new Text(heading, 0, 0);
+    return new Text([heading, plain(message.details?.question ?? '')].join('\n'), 1, 0);
   });
 
   pi.registerMessageRenderer<{ jobs?: Job[] }>('agents-auto', (message, { expanded }, theme) => {

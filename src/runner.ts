@@ -5,8 +5,8 @@ import { childPrompt, neutralCatalogue, type ModelChoice } from './context.ts';
 import { read as readWire } from './wire.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
 import {
-  ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
-  WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk,
+  ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
+  WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk,
   type DelegateAnswer, type DelegateAsk, type Job, type ModelAsk, type Usage,
 } from './schema.ts';
 
@@ -38,6 +38,11 @@ export type RunnerEvent =
 export type Handle = {
   /** Ask it to stop, then make sure it stopped. Safe to call twice. */
   stop(reason: string): Promise<void>;
+  /**
+   * Put words in front of a live child: a steer while it runs, a prompt that
+   * starts a turn when it idles, and nothing at all once it has reported.
+   */
+  steer?(message: string): Promise<boolean>;
 };
 export type Runner = (job: Job, emit: (event: RunnerEvent) => void) => Promise<Handle>;
 
@@ -183,6 +188,8 @@ export function spawnRunner(options: {
   catalogue?: () => ModelChoice[];
   /** Where wire files live. Absent means siblings cannot reach each other. */
   wireRoot?: string;
+  /** A child's question, escalated. Absent means the child is told to report. */
+  onAsk?: (job: Job, question: string) => Promise<DelegateAnswer>;
   /** How often sibling mail is polled. Injected by the tests; 2s in life. */
   wireMs?: number;
   /** Injected so tests never reach for a real binary. */
@@ -202,7 +209,7 @@ export function spawnRunner(options: {
      */
     const inherited = options.tools ?? job.tools ?? READ_ONLY_TOOLS;
     const wired = options.wireRoot !== undefined && job.wire !== undefined;
-    const tools = [...new Set([...inherited, REPORT_TOOL, MODEL_TOOL,
+    const tools = [...new Set([...inherited, REPORT_TOOL, MODEL_TOOL, ASK_TOOL,
       ...(mayDelegate ? [DELEGATE_TOOL] : []),
       ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : []),
     ])];
@@ -300,9 +307,19 @@ export function spawnRunner(options: {
         emit({ type: 'model', provider: wanted.provider, modelId: wanted.modelId });
         return { ok: true, text: `You are now running on ${wanted.provider}/${wanted.modelId}.` };
       }
+      if (kind === 'ask') {
+        if (!checkQuestionAsk(ask)) {
+          return { ok: false, text: 'That question was not understood. It needs a question, in words.' };
+        }
+        if (!options.onAsk) {
+          return { ok: false, text: 'There is no one to ask from here. Report what blocks you instead.' };
+        }
+        try { return await options.onAsk(job, (ask as { question: string }).question); }
+        catch { return { ok: false, text: 'The question could not be sent. Report what blocks you instead.' }; }
+      }
       if (kind !== 'delegate') {
         return { ok: false, text: 'That request was not understood, so nothing was started. '
-          + 'It needs a kind: delegate, models, or use_model.' };
+          + 'It needs a kind: delegate, models, use_model, or ask.' };
       }
       if (!options.onDelegate || !mayDelegate) {
         return { ok: false, text: 'Delegation is not available from here. Report what you found and what you could not reach.' };
@@ -449,6 +466,20 @@ export function spawnRunner(options: {
     // that is still in flight has already finished.
     const stop = (_reason: string): Promise<void> => (state.stopping ??= end());
 
+    /**
+     * Words for a live child. A steer rides beside a running turn; an idle
+     * child needs a prompt to start one. A child that has reported gets
+     * nothing: its session is over and its report already said what it knew.
+     */
+    const steer = async (message: string): Promise<boolean> => {
+      if (state.done || !alive()) return false;
+      const steered = await within(2_000, send({ type: 'steer', message }), { success: false } as Record<string, unknown>);
+      if (steered.success === true) return true;
+      if (state.report !== undefined || state.done) return false;
+      const prompted = await within(2_000, send({ type: 'prompt', message }), { success: false } as Record<string, unknown>);
+      return prompted.success === true;
+    };
+
     // Selecting the model is a command, not a flag, for the reason above. An
     // unavailable model fails the job here rather than quietly running on
     // whatever the session happened to have.
@@ -460,7 +491,7 @@ export function spawnRunner(options: {
       terminal({ type: 'failed', reason: `The child could not use ${job.provider}/${job.modelId}: ${why}` });
       // The teardown runs on its own; the handle is how a caller joins it.
       void stop('model unavailable');
-      return { stop };
+      return { stop, steer };
     }
 
     /**
@@ -475,7 +506,7 @@ export function spawnRunner(options: {
       const why = String(taken.error ?? 'no reason given').slice(0, 200);
       terminal({ type: 'failed', reason: `The child would not take the task: ${why}` });
       void stop('task refused');
-      return { stop };
+      return { stop, steer };
     }
 
     /**
@@ -512,7 +543,7 @@ export function spawnRunner(options: {
     }
 
     emit({ type: 'running' });
-    return { stop };
+    return { stop, steer };
   };
 }
 

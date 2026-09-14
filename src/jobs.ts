@@ -27,6 +27,8 @@ export type Wiring = {
 export type Jobs = {
   /** Admit and start. A refusal is returned, never thrown and never queued. */
   delegate(request: Request): Promise<Admission>;
+  /** Put words in front of a live job. False when there is nobody to hear them. */
+  steerTo(jobId: string, message: string): Promise<boolean>;
   /** End one job and its subtree, whatever state it is in. */
   cancel(jobId: string, reason: string): Promise<void>;
   /** Time passes: expire what has run too long and start what can start. */
@@ -142,6 +144,16 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
   };
 
   return {
+    async steerTo(jobId, message) {
+      const job = find(store.ledger, jobId);
+      if (!job || isTerminal(job.state)) return false;
+      const handle = handles.get(jobId);
+      if (!handle) return false;
+      // A start that failed leaves a rejected promise here; unreachable is an
+      // answer, never an exception for the one who asked.
+      try { return await (await handle).steer?.(message) ?? false; } catch { return false; }
+    },
+
     async delegate(request) {
       const decision = admit(store.ledger, request, wiring.now(), limits);
       if (!decision.ok || decision.repeated) return decision;

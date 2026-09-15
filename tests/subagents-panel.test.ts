@@ -123,3 +123,54 @@ test('enter on a live job without a transcript says so instead of opening an emp
   panel.handleInput('\r');
   assert.match(panel.render(100).join('\n'), /has not said where its transcript lives/);
 });
+
+test('a steered draft is sanitized and capped: no control codes, no epics', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-draft-'));
+  const file = join(root, 'child.jsonl');
+  await writeFile(file, JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'work' }] } }));
+  const live = job({ name: 'Omar', sessionFile: file });
+  const steered: string[] = [];
+  const { tui: tt } = tui();
+  const panel = agentsPanel({
+    ledger: () => ledger([live]), cancel: async () => {},
+    steer: async (_id, message) => { steered.push(message); return true; },
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
+  panel.handleInput('\r');
+  // Control sequences and control characters never leave the panel: the
+  // editor ignores the escape run, and clean() strips the bell.
+  for (const key of 'read ') panel.handleInput(key);
+  panel.handleInput('\x1b[31m');
+  for (const key of 'the queue') panel.handleInput(key);
+  panel.handleInput('\x07');
+  panel.handleInput('\r');
+  assert.equal(steered.length, 1);
+  assert.equal(steered[0], 'read the queue', 'controls never reach the child');
+  // An epic draft is capped at a sentence.
+  panel.handleInput('x'.repeat(600));
+  panel.handleInput('\r');
+  assert.ok((steered[1]?.length ?? 0) <= 240, 'a steer is a sentence, not a file');
+  await rm(root, { recursive: true, force: true });
+});
+
+test('a job that settles while watched becomes a report with one way out', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-settled-'));
+  const file = join(root, 'child.jsonl');
+  await writeFile(file, JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'work' }] } }));
+  const live = job({ name: 'Omar', sessionFile: file });
+  const store = { job: live };
+  const { tui: tt } = tui();
+  const panel = agentsPanel({
+    ledger: () => ledger([store.job]), cancel: async () => {}, steer: async () => true,
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
+  panel.handleInput('\r');
+  store.job = { ...live, state: 'completed', settled: 10 };
+  const view = panel.render(100).join('\n');
+  assert.match(view, /settled as completed/, 'the footer tells the truth about a settled job');
+  assert.doesNotMatch(view, /type to steer/);
+  panel.handleInput('x');
+  panel.handleInput('\x1b');
+  assert.doesNotMatch(panel.render(100).join('\n'), /settled as/, 'esc still returns to the list');
+  await rm(root, { recursive: true, force: true });
+});

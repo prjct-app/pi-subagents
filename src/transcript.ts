@@ -25,8 +25,9 @@ export async function readTranscript(file: string): Promise<TranscriptEntry[]> {
   try {
     const from = Math.max(0, size - TAIL_BYTES);
     const buffer = Buffer.alloc(Math.min(size, TAIL_BYTES));
-    await handle.read(buffer, 0, buffer.length, from);
-    const lines = buffer.toString('utf8').split('\n');
+    // A short read (the file moved under us) renders what arrived, not zeros.
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, from);
+    const lines = buffer.subarray(0, bytesRead).toString('utf8').split('\n');
     // The first line of a tail read may be torn mid-frame.
     const whole = from > 0 ? lines.slice(1) : lines;
     return whole.flatMap(line => {

@@ -12,7 +12,7 @@ import { getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
 import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
-import { spawnRunner } from './runner.ts';
+import { selectChildTools, spawnRunner } from './runner.ts';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger } from './schema.ts';
@@ -103,12 +103,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
    * The tools a child inherits: whatever this session may use right now, minus
    * this package's own parent tools — a child asks for children through the
    * guard, never through agent_delegate. In plan mode the active set is
-   * already read-only, so a child born there is a reader too, and its shell
-   * is held to read-only commands by the guard.
+   * already read-only, so a child born there is a reader too. Bash is a
+   * separate, explicit capability: it is inherited only by a writable child
+   * when the operator opted in, and it is never described as a sandbox.
    */
   const inheritedTools = (): string[] => {
     try {
-      return pi.getActiveTools().filter(name => name !== 'agent_delegate' && name !== 'agent_jobs');
+      const active = pi.getActiveTools().filter(name => name !== 'agent_delegate' && name !== 'agent_jobs');
+      return selectChildTools(active, process.env.PI_SUBAGENTS_ALLOW_BASH === '1');
     } catch {
       return [...READ_ONLY_TOOLS];
     }
@@ -344,10 +346,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     pi.registerTool({
       name: 'agent_delegate',
       label: 'Delegate a job',
-      description: 'Start a read-only subagent on one separable piece of work. It derives its own '
-        + 'acceptance criteria, returns evidence, and ends. It cannot write, run anything, or reach '
-        + 'anyone, so give it everything it needs in context. Fence it with cwd when the work is not '
-        + 'in this session\'s directory — it cannot read outside that folder. It runs beside you: do not wait for it, '
+      description: 'Start a subagent on one separable piece of work. It derives its own acceptance '
+        + 'criteria, returns evidence, and ends. It inherits this session\'s active tools; built-in file '
+        + 'tools are fenced to cwd. Bash is excluded unless PI_SUBAGENTS_ALLOW_BASH=1 and the child is writable; '
+        + 'when enabled it is unrestricted, not sandboxed. It runs beside you: do not wait for it, '
         + `and do not delegate what you could finish in the time this costs. ${hint}`,
       parameters: Type.Object({
         role: StringEnum(ROLES),

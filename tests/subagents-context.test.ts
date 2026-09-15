@@ -71,7 +71,7 @@ test('a child is told its task and what it was handed, and nothing else', () => 
   assert.match(prompt, /^- ls —/m);
   assert.match(prompt, new RegExp(`- ${REPORT_TOOL} —`));
   assert.doesNotMatch(prompt, /subagent_delegate/, 'the tool is absent, not forbidden in prose');
-  assert.match(prompt, /do not have write, edit, or an unrestricted shell/);
+  assert.match(prompt, /do not have write, edit, or bash/);
 });
 
 test('a child that may delegate is told the tool exists, and one that may not is not', () => {
@@ -115,10 +115,12 @@ test('a child prompt names the tools it was actually given', () => {
   const worker = childPrompt({ name: 'Nadia', role: 'explorer', subject: 's', task: 't',
     tools: ['read', 'grep', 'find', 'ls', 'bash', 'edit', 'write'] });
   assert.match(worker, /edit — change a file/);
-  assert.match(worker, /same tools as the session that asked/);
+  assert.match(worker, /Bash was explicitly enabled/);
+  assert.match(worker, /unrestricted and not sandboxed/);
+  assert.match(worker, /remain fenced to the working directory/);
   assert.doesNotMatch(worker, /do not have write/);
   const reader = childPrompt({ name: 'Nadia', role: 'explorer', subject: 's', task: 't' });
-  assert.match(reader, /do not have write, edit, or an unrestricted shell/);
+  assert.match(reader, /do not have write, edit, or bash/);
 });
 
 test('the catalogue a child chooses from carries facts, never advice', () => {

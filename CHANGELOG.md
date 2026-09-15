@@ -7,8 +7,10 @@
   `team_jobs`), with the `/agents` command.
 - `/agents` is a live panel over the ledger — tree, state, model, elapsed,
   cost — with report detail and stop; a widget names live jobs while any run.
-- Children inherit the session's active tools, fenced to their directory; in
-  plan mode that set is read-only, and their shell answers read-only commands.
+- Children inherit the session's active tools; built-in file tools are fenced to their directory;
+  in plan mode that set is read-only. Bash is disabled by default and can be
+  enabled for writable children with `PI_SUBAGENTS_ALLOW_BASH=1`; when enabled
+  it is explicitly unrestricted and not described as a filesystem sandbox.
 - A child chooses its own model from the machine's catalogue, presented
   without recommendation.
 - Auto-delegation: `/agents auto on` triages complex typed prompts and

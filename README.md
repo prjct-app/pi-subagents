@@ -1,9 +1,9 @@
 # pi-subagents
 
 Subagents for PI Agent: expert child processes that work beside your session
-and report back with evidence. Each one is its own `pi` process — fenced to a
-directory, armed with the tools your session has, on a model it chooses for
-itself — and it is gone when it reports.
+and report back with evidence. Each one is its own `pi` process — its file
+tools fenced to a directory, armed with selected active tools from your session,
+on a model it chooses for itself — and it is gone when it reports.
 
 No team, no alias, no mailbox required. When
 [pi-team](https://github.com/prjct-app/pi-team) is installed beside this
@@ -33,10 +33,11 @@ pi install npm:@prjct.app/pi-subagents
 
 ## What a subagent is
 
-A first-class citizen with one task. It inherits the session's *active* tools
-— in plan mode that set is read-only, so the child is a reader and its shell
-answers read-only commands only; otherwise it can write, fenced to the
-directory it was given. It chooses its own model from the machine's catalogue,
+A first-class citizen with one task. It inherits the session's *active* tools.
+Built-in file tools are fenced to the directory it was given; in plan mode that
+set is read-only, while an ordinary writable session can pass edit and write. Bash is disabled by default
+and never presented as a read-only shell or a filesystem sandbox. It chooses
+its own model from the machine's catalogue,
 presented as facts, never as advice. It can ask for a subagent of its own
 (depth 2, one budget and one clock per tree), message its siblings over the
 tree's wire, and ask its parent — or its grandparent, up to your session —
@@ -48,6 +49,13 @@ with it.
 - `PI_AGENTS_AUTO` — `1` turns auto-delegation on for every session.
 - `PI_SUBAGENTS_PI_COMMAND` — how to launch `pi`, when the default (the same
   build this session runs on) does not fit the host.
+- `PI_SUBAGENTS_ALLOW_BASH` — `1` lets children that inherited `edit` or
+  `write` inherit Bash too. **This is an unrestricted capability, not a
+  sandbox.** The child starts in its assigned directory, but Bash can access
+  anything available to your operating-system account: files outside that
+  directory, credentials, the network, and other processes. Leave it unset
+  unless that reach is intentional; use an operating-system sandbox when you
+  need isolation.
 
 ## Development
 

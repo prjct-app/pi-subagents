@@ -96,6 +96,31 @@ test('delegating starts a child and says plainly not to wait for it', async () =
   assert.equal(h.ledger().jobs.length, 1, 'and the ledger reaches the session file');
 });
 
+test('bash is inherited only after the operator opts a writable child in', async (t) => {
+  const before = process.env.PI_SUBAGENTS_ALLOW_BASH;
+  t.after(() => {
+    if (before === undefined) delete process.env.PI_SUBAGENTS_ALLOW_BASH;
+    else process.env.PI_SUBAGENTS_ALLOW_BASH = before;
+  });
+  delete process.env.PI_SUBAGENTS_ALLOW_BASH;
+  const closed = host();
+  await closed.emit('session_start', { reason: 'resume' });
+  const without = (await closed.delegate()).details as Job;
+  assert.equal(without.tools?.includes('bash'), false);
+
+  process.env.PI_SUBAGENTS_ALLOW_BASH = '1';
+  const open = host();
+  await open.emit('session_start', { reason: 'resume' });
+  const withBash = (await open.delegate()).details as Job;
+  assert.equal(withBash.tools?.includes('bash'), true);
+
+  process.env.PI_SUBAGENTS_ALLOW_BASH = 'true';
+  const almost = host();
+  await almost.emit('session_start', { reason: 'resume' });
+  const notExact = (await almost.delegate()).details as Job;
+  assert.equal(notExact.tools?.includes('bash'), false, 'only the documented exact value opts in');
+});
+
 test('the model is this session’s unless one from its own list is asked for', async () => {
   const h = host();
   await h.emit('session_start', { reason: 'resume' });
@@ -250,7 +275,13 @@ test('a session going away takes its children with it', async () => {
   assert.equal(h.of(job).stops.length, 1);
 });
 
-test('auto-delegation is off until a person turns it on, and then complex prompts launch experts', async () => {
+test('auto-delegation is off until a person turns it on, and then complex prompts launch experts', async (t) => {
+  const before = process.env.PI_SUBAGENTS_ALLOW_BASH;
+  t.after(() => {
+    if (before === undefined) delete process.env.PI_SUBAGENTS_ALLOW_BASH;
+    else process.env.PI_SUBAGENTS_ALLOW_BASH = before;
+  });
+  delete process.env.PI_SUBAGENTS_ALLOW_BASH;
   const calls: string[] = [];
   const h = host({
     complete: async (_system, user) => {
@@ -280,8 +311,8 @@ test('auto-delegation is off until a person turns it on, and then complex prompt
   assert.equal(h.runs.size, 2, 'the triage became jobs without the model calling any tool');
   const launched = [...h.runs.values()].map(run => run.job);
   assert.deepEqual(launched.map(job => job.subject).sort(), ['map the store', 'review the runner']);
-  assert.deepEqual(launched[0].tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
-    'auto jobs inherit the active tools like any other');
+  assert.deepEqual(launched[0].tools, ['read', 'edit', 'write', 'grep', 'find', 'ls'],
+    'auto jobs inherit active file tools, but Bash needs its own consent');
   const told = h.sent.find(item => item.message.customType === 'agents-auto');
   assert.ok(told, 'the session is told what was launched');
   assert.match(told.message.content, /auto-launch 2 expert subagents/);

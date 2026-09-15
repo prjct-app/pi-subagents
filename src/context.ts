@@ -136,7 +136,7 @@ const TOOL_BLURB: Record<string, string> = {
   grep: 'grep — search file contents under the working directory.',
   find: 'find — find files by name under the working directory.',
   ls: 'ls — list a directory under the working directory.',
-  bash: 'bash — run commands from the working directory.',
+  bash: 'bash — run an unrestricted shell. The working directory is its starting point, not a sandbox.',
   edit: 'edit — change a file under the working directory.',
   write: 'write — create or replace a file under the working directory.',
 };
@@ -156,8 +156,9 @@ export function childPrompt(input: {
 }): string {
   const context = input.context?.trim();
   const inherited = input.tools ?? READ_ONLY_TOOLS;
-  /** A child with edit or write is a worker; without them, a reader. */
+  /** File mutation and an unrestricted shell are separate capabilities. */
   const writer = inherited.includes('edit') || inherited.includes('write');
+  const bash = inherited.includes('bash');
   const tools = [
     ...inherited.map(name => TOOL_BLURB[name] ?? `${name} — inherited from the session that asked.`),
     `${REPORT_TOOL} — return the report and end. This is the only way anything you learn leaves this process.`,
@@ -184,11 +185,15 @@ export function childPrompt(input: {
     '',
     ...tools.map(line => `- ${line}`),
     '',
-    writer
-      ? 'You have the same tools as the session that asked, minus delegation and team tools. '
-        + 'Every path stays under the working directory you were given; the fence cannot be talked around.'
-      : 'You do not have write, edit, or an unrestricted shell: bash answers read-only commands only. '
-        + 'You do not have any agent_* tool.',
+    bash
+      ? 'Bash was explicitly enabled by the operator. It is unrestricted and not sandboxed: the working '
+        + 'directory is only where it starts, and it may reach anything the operating-system account can. '
+        + 'Read, edit, write, grep, find, and ls remain fenced to the working directory.'
+      : writer
+        ? 'You may change files through the tools you were given; those file tools stay under the working '
+          + 'directory. Bash is not available.'
+        : 'You do not have write, edit, or bash. Your file tools are read-only and stay under the working directory. '
+          + 'You do not have any agent_* tool.',
     '',
     'Work out the acceptance criteria yourself, from the task below, before you open anything. '
     + 'Report every criterion as met, not met, or unknown, each with the evidence for it — file and '
@@ -199,10 +204,14 @@ export function childPrompt(input: {
     + 'anything done: the session that asked holds the request you have not seen, and judges your '
     + 'evidence against it.',
     '',
-    'If you cannot finish — something outside the working directory, a decision that is not yours, '
-    + `anything beyond the tools you have — ask with ${ASK_TOOL} when an answer would unblock you, `
-    + 'and report it as a blocker either way, naming exactly what you need to continue. '
-    + 'Do not look for a way around it, and do not wait for anyone.',
+    bash
+      ? `If you cannot finish — a decision that is not yours, anything beyond the tools you have — ask with ${ASK_TOOL} `
+        + 'when an answer would unblock you, and report it as a blocker either way, naming exactly what you need '
+        + 'to continue. Do not wait for anyone.'
+      : 'If you cannot finish — something outside the working directory, a decision that is not yours, '
+        + `anything beyond the tools you have — ask with ${ASK_TOOL} when an answer would unblock you, `
+        + 'and report it as a blocker either way, naming exactly what you need to continue. '
+        + 'Do not look for a way around it, and do not wait for anyone.',
     '',
     `Calling ${REPORT_TOOL} ends this session. Nothing else you write here is read by anyone. `
     + 'Report once, and report it whole.',
@@ -218,15 +227,15 @@ export function childPrompt(input: {
 }
 
 /**
- * Where a job may look. Omitted means the parent session's directory. A path
- * that is not a directory is refused rather than silently falling back: the
- * child is fenced to this folder, so a wrong one is a job that cannot do the work.
+ * Where a job starts. Omitted means the parent session's directory. A path
+ * that is not a directory is refused rather than silently falling back. File
+ * tools are fenced here; explicitly enabled Bash is not a sandbox.
  */
 export function resolveWorkDir(base: string, wanted?: string): { cwd: string } | { refused: string } {
   const raw = wanted?.trim();
   if (!raw) return { cwd: base };
   const cwd = resolve(base, raw);
-  if (!existsSync(cwd)) return { refused: `${cwd} does not exist, so a job cannot be fenced there.` };
+  if (!existsSync(cwd)) return { refused: `${cwd} does not exist, so a job cannot start there.` };
   try {
     if (!statSync(cwd).isDirectory()) return { refused: `${cwd} is not a directory.` };
   } catch {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { childArgs, frames, spawnRunner, type RunnerEvent } from '../src/runner.ts';
+import { childArgs, frames, selectChildTools, spawnRunner, type RunnerEvent } from '../src/runner.ts';
 import { childPrompt } from '../src/context.ts';
 import {
   ASK_PREFIX, DELEGATE_TOOL, REPORT_TOOL, newJobId, type DelegateAnswer, type Job,
@@ -166,6 +166,36 @@ test('the child starts with ambient discovery off, and able to read and to repor
   assert.equal(args.includes('--no-session'), false,
     'the session file is what makes a child visible to the panel for free');
   assert.equal(args.some(arg => /write|edit|bash|apply/.test(arg)), false);
+});
+
+test('Bash selection requires both explicit consent and a writable child', () => {
+  const worker = ['read', 'bash', 'edit', 'write'];
+  assert.deepEqual(selectChildTools(worker, false), ['read', 'edit', 'write']);
+  assert.deepEqual(selectChildTools(worker, true), worker);
+  assert.deepEqual(selectChildTools(['read', 'bash', 'grep'], true), ['read', 'grep'],
+    'plan-mode and other readers cannot turn Bash into an undeclared write path');
+});
+
+test('the runner filters stale job tools and gives the prompt the exact same Bash policy', async (t) => {
+  const before = process.env.PI_SUBAGENTS_ALLOW_BASH;
+  t.after(() => {
+    if (before === undefined) delete process.env.PI_SUBAGENTS_ALLOW_BASH;
+    else process.env.PI_SUBAGENTS_ALLOW_BASH = before;
+  });
+  const inherited = ['read', 'bash', 'edit', 'write'];
+  delete process.env.PI_SUBAGENTS_ALLOW_BASH;
+  const closed = await started({ tools: inherited }, live);
+  assert.doesNotMatch(closed.args.at(-1) ?? '', /bash/);
+  const closedPrompt = closed.child.sent.find((message: any) => message.type === 'prompt')?.message ?? '';
+  assert.match(closedPrompt, /Bash is not available/);
+  assert.doesNotMatch(closedPrompt, /explicitly enabled/);
+
+  process.env.PI_SUBAGENTS_ALLOW_BASH = '1';
+  const open = await started({ tools: inherited }, live);
+  assert.match(open.args.at(-1) ?? '', /bash/);
+  const openPrompt = open.child.sent.find((message: any) => message.type === 'prompt')?.message ?? '';
+  assert.match(openPrompt, /Bash was explicitly enabled/);
+  assert.match(openPrompt, /unrestricted and not sandboxed/);
 });
 
 test('a model the child cannot use fails the job instead of running on another', async () => {

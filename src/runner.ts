@@ -171,6 +171,16 @@ export function piInvocation(args: readonly string[]): { command: string; args: 
 
 type Pending = Map<number, (value: Record<string, unknown>) => void>;
 
+/**
+ * Bash is a distinct, explicit capability, never an accidental side effect of
+ * inheriting the parent's tool list. A read-only child cannot use it to become
+ * a writer, even when the operator enabled Bash for writable children.
+ */
+export function selectChildTools(active: readonly string[], allowBash: boolean): string[] {
+  const writer = active.includes('edit') || active.includes('write');
+  return active.filter(name => name !== 'bash' || (allowBash && writer));
+}
+
 /** One `pi` child, spoken to over RPC. */
 export function spawnRunner(options: {
   guardPath: string;
@@ -210,8 +220,9 @@ export function spawnRunner(options: {
      * tools ride along; a test can still widen the whole set via options.
      */
     const inherited = options.tools ?? job.tools ?? READ_ONLY_TOOLS;
+    const permitted = selectChildTools(inherited, process.env.PI_SUBAGENTS_ALLOW_BASH === '1');
     const wired = options.wireRoot !== undefined && job.wire !== undefined;
-    const tools = [...new Set([...inherited, REPORT_TOOL, MODEL_TOOL, ASK_TOOL,
+    const tools = [...new Set([...permitted, REPORT_TOOL, MODEL_TOOL, ASK_TOOL,
       ...(mayDelegate ? [DELEGATE_TOOL] : []),
       ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : []),
     ])];
@@ -510,7 +521,7 @@ export function spawnRunner(options: {
      * the prompt was taken, not that the work is done.
      */
     const taken = await within(START_DEADLINE_MS,
-      send({ type: 'prompt', message: childPrompt({ ...job, canDelegate: mayDelegate, wired }) }),
+      send({ type: 'prompt', message: childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired }) }),
       { success: false, error: 'it never answered' } as Record<string, unknown>);
     if (taken.success !== true) {
       const why = String(taken.error ?? 'no reason given').slice(0, 200);

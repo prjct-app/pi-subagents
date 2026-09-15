@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { bashWithin, contains, installGuard, readAnswer } from '../src/child.ts';
+import { contains, installGuard, readAnswer } from '../src/child.ts';
 import { ASK_PREFIX, DELEGATE_TOOL, READ_ONLY_TOOLS, REPORT_TOOL } from '../src/schema.ts';
 
 /** The slice of the host a guard touches, and nothing else. */
@@ -147,28 +147,42 @@ test('a parent that never answers is a refusal, not a wait', () => {
   assert.deepEqual(readAnswer('{"ok":true,"text":"Accepted."}'), { ok: true, text: 'Accepted.' });
 });
 
-test('a child with edit or write is a worker; its shell is unrestricted', () => {
+test('listing bash is not consent: it stays disabled without the exact opt-in', () => {
   const { pi, call } = fakePi();
   installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,edit,write,subagent_report' });
-  assert.equal(call({ toolName: 'edit', input: { path: 'src/a.ts' } }, '/work'), undefined);
-  assert.equal(call({ toolName: 'bash', input: { command: 'rm -rf dist' } }, '/work'), undefined,
-    'a worker keeps the shell its parent had');
+  assert.equal(call({ toolName: 'edit', input: { path: 'src/a.ts' } }, '/work'), undefined,
+    'file mutation is a separate capability');
+  assert.match(String(call({ toolName: 'bash', input: { command: 'git status' } }, '/work')?.reason),
+    /Bash is disabled/);
 });
 
-test('a child without edit and write is a reader, and its shell answers read-only commands only', () => {
+test('opted-in bash is honestly unrestricted, not fenced by parsing shell text', () => {
   const { pi, call } = fakePi();
-  installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,grep,find,ls,subagent_report' });
-  const blocked = call({ toolName: 'bash', input: { command: 'rm -rf dist' } }, '/work');
-  assert.match(String(blocked?.reason), /read-only/);
-  assert.equal(call({ toolName: 'bash', input: { command: 'git status' } }, '/work'), undefined);
-  const edit = call({ toolName: 'edit', input: { path: 'src/a.ts' } }, '/work');
-  assert.match(String(edit?.reason), /not available here/, 'edit was never in the allowlist');
+  installGuard(pi, {
+    PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_ALLOW_BASH: '1',
+    PI_SUBAGENTS_TOOLS: 'read,bash,edit,write,subagent_report',
+  });
+  assert.equal(call({ toolName: 'bash', input: { command: 'rm -rf dist' } }, '/work'), undefined);
+  assert.equal(call({ toolName: 'bash', input: { command: 'cat /etc/passwd' } }, '/work'), undefined);
+  assert.equal(call({ toolName: 'bash', input: { command: 'cat</etc/passwd' } }, '/work'), undefined,
+    'there is no token parser pretending this is a sandbox');
 });
 
-test('without the environment list the child is read-only, as it was always promised', () => {
+test('the opt-in cannot turn a read-only child into a writer through bash', () => {
+  const { pi, call } = fakePi();
+  installGuard(pi, {
+    PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_ALLOW_BASH: '1',
+    PI_SUBAGENTS_TOOLS: 'read,bash,grep,find,ls,subagent_report',
+  });
+  assert.match(String(call({ toolName: 'bash', input: { command: 'git status' } }, '/work')?.reason),
+    /only to a child with edit or write/);
+  assert.equal(call({ toolName: 'read', input: { path: 'src/a.ts' } }, '/work'), undefined);
+});
+
+test('without an inherited list a child gets only read-only file tools', () => {
   const { pi, call } = fakePi();
   installGuard(pi, CHILD);
-  assert.match(String(call({ toolName: 'bash', input: { command: 'ls' } }, '/work')?.reason), /not available here/);
+  assert.match(String(call({ toolName: 'bash', input: { command: 'ls' } }, '/work')?.reason), /Bash is disabled/);
 });
 
 test('the model tool is armed in a child and its ask reaches the parent as JSON', async () => {
@@ -240,26 +254,6 @@ test('a writer cannot reach outside the tree through a symlink whose target is n
   }
 });
 
-test('a writer\'s shell stays inside the tree: absolute paths, ~, and .. are fenced', () => {
-  assert.equal(bashWithin('/work', 'cat /etc/passwd'), false);
-  assert.equal(bashWithin('/work', 'cat ~/secrets'), false);
-  assert.equal(bashWithin('/work', 'cd ../.. && ls'), false);
-  assert.equal(bashWithin('/work', 'cat ../../etc/passwd'), false);
-  assert.equal(bashWithin('/work', 'cp src/a.ts /tmp/b.ts'), false);
-  assert.equal(bashWithin('/work', 'out=/tmp/x npm test'), false, 'env-style assignments are judged too');
-  assert.equal(bashWithin('/work', 'cat src/a.ts > /dev/null'), true, 'devices are not the tree but are not a leak');
-  assert.equal(bashWithin('/work', 'git diff main..feat'), true, 'a range is not a parent traversal');
-  assert.equal(bashWithin('/work', 'node scripts/build.js && echo done'), true);
-});
-
-test('the guard applies the shell fence for writers, not just the allowlist for readers', () => {
-  const { pi, call } = fakePi();
-  installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,edit,write,subagent_report' });
-  assert.match(String(call({ toolName: 'bash', input: { command: 'cat /etc/passwd' } }, '/work')?.reason),
-    /fenced/, 'an absolute path outside is blocked even for a writer');
-  assert.equal(call({ toolName: 'bash', input: { command: 'cat src/a.ts' } }, '/work'), undefined);
-});
-
 test('a dangling symlink is judged by where it points, existing or not', async () => {
   const root = await mkdtemp(join(tmpdir(), 'pi-subagents-dangle-'));
   const outside = join(tmpdir(), 'pi-subagents-nowhere-' + Date.now());
@@ -287,35 +281,5 @@ test('a symlink loop is refused by the kernel\'s own rule, not by hanging', asyn
     assert.ok(Date.now() - start < 1_000, 'resolution is capped, never a hang');
   } finally {
     await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('a reader is held to the path fence too: cat reads the tree, never /etc', () => {
-  const { pi, call } = fakePi();
-  installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,grep,find,ls,subagent_report' });
-  assert.match(String(call({ toolName: 'bash', input: { command: 'cat /etc/passwd' } }, '/work')?.reason),
-    /fenced/, 'a safe command name is not a safe path');
-  assert.equal(call({ toolName: 'bash', input: { command: 'cat src/a.ts' } }, '/work'), undefined);
-});
-
-test('a writer cannot reach out through a relative symlink in a command', () => {
-  assert.equal(bashWithin('/work', 'cat dir/link/evil'), true,
-    'the token itself is not the verdict — but with no symlink there, it stays inside');
-  assert.equal(bashWithin('/work', 'cat ./src/a.ts'), true);
-  assert.equal(bashWithin('/work', 'head -20 ../outside/x'), false);
-});
-
-test('a writer is fenced through a relative symlink on disk', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-bashlink-'));
-  const outside = await mkdtemp(join(tmpdir(), 'pi-subagents-out2-'));
-  try {
-    await mkdir(join(root, 'dir'), { recursive: true });
-    await symlink(outside, join(root, 'dir', 'link'));
-    assert.equal(bashWithin(root, 'cat dir/link/evil'), false,
-      'the command is judged by where the path lands');
-    assert.equal(bashWithin(root, 'cat dir/file.ts'), true);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
   }
 });

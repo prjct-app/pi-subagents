@@ -190,7 +190,7 @@ test('a bracketed paste carrying control sequences never reaches the screen', as
   t.after(() => panel.dispose());
   panel.handleInput('\r');
   // A paste block with a color sequence and a bell inside it.
-  panel.handleInput('\x1b[200~read \x1b[31mthe queue\x07 now\x1b[201~');
+  panel.handleInput('\x1b[200~read\n\t\x1b[31mthe queue\x07 now\x1b[201~');
   // Two things on that line are pi-tui's own, not the draft's: the cursor
   // marker (the renderer strips it to place the hardware cursor) and the
   // reverse-video block it draws as the caret. What must not survive is the
@@ -244,7 +244,6 @@ test('the panel is Focusable and hands the focus to its embedded editor', () => 
   assert.equal(panel.focused, false);
   panel.dispose();
 });
-
 
 test('an abandoned transcript read cannot release the next job read lock', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'pi-subagents-read-owner-'));
@@ -326,5 +325,30 @@ test('an unterminated bracketed paste stays bounded and never traps the editor',
   panel.handleInput('k');
   panel.handleInput('\r');
   assert.equal(steered[1], 'ok', 'the forced boundary did not leave Input in paste mode');
+  await rm(root, { recursive: true, force: true });
+});
+
+test('escape abandons an unterminated paste and returns to the job list', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-paste-escape-'));
+  const file = join(root, 'child.jsonl');
+  await writeFile(file, 'x');
+  const live = job({ name: 'Omar', sessionFile: file });
+  const steered: string[] = [];
+  const { tui: tt } = tui();
+  const panel = agentsPanel({
+    ledger: () => ledger([live]),
+    cancel: async () => {},
+    steer: async (_id, message) => { steered.push(message); return true; },
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
+  panel.handleInput('\r');
+  panel.handleInput('\x1b[200~unfinished words');
+  panel.handleInput('\x1b');
+  assert.doesNotMatch(panel.render(100).join('\n'), /type to steer/, 'escape returned to the list');
+  panel.handleInput('\r');
+  panel.handleInput('o');
+  panel.handleInput('k');
+  panel.handleInput('\r');
+  assert.deepEqual(steered, ['ok'], 'the abandoned paste leaked nothing into the next takeover');
   await rm(root, { recursive: true, force: true });
 });

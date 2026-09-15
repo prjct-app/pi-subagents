@@ -218,7 +218,9 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     paste.value = bounded;
   };
   const commitPaste = (): void => {
-    const value = paste.value;
+    // Input is a single-line editor: normalize pasted newlines and tabs to
+    // spaces before insertion instead of letting it reject the whole chunk.
+    const value = clean(paste.value);
     paste.open = false;
     paste.value = '';
     if (value) input.handleInput(value);
@@ -250,6 +252,9 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       if (matchesKey(data, Key.escape)) leave();
       return;
     }
+    // Escape is navigation even while a malformed paste is missing its END:
+    // the bounded panel buffer is discarded and Input was never put in paste mode.
+    if (matchesKey(data, Key.escape)) { leave(); return; }
     feedInput(data);
   };
 

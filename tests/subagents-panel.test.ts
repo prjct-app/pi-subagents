@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { CURSOR_MARKER } from '@earendil-works/pi-tui';
 import { agentsPanel, rows } from '../src/panel.ts';
 import { newJobId, type Job, type Ledger } from '../src/schema.ts';
 
@@ -173,4 +174,73 @@ test('a job that settles while watched becomes a report with one way out', async
   panel.handleInput('\x1b');
   assert.doesNotMatch(panel.render(100).join('\n'), /settled as/, 'esc still returns to the list');
   await rm(root, { recursive: true, force: true });
+});
+
+test('a bracketed paste carrying control sequences never reaches the screen', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-paste-'));
+  const file = join(root, 'child.jsonl');
+  await writeFile(file, JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'work' }] } }));
+  const live = job({ name: 'Omar', sessionFile: file });
+  const steered: string[] = [];
+  const { tui: tt } = tui();
+  const panel = agentsPanel({
+    ledger: () => ledger([live]), cancel: async () => {},
+    steer: async (_id, message) => { steered.push(message); return true; },
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
+  panel.handleInput('\r');
+  // A paste block with a color sequence and a bell inside it.
+  panel.handleInput('\x1b[200~read \x1b[31mthe queue\x07 now\x1b[201~');
+  // Two things on that line are pi-tui's own, not the draft's: the cursor
+  // marker (the renderer strips it to place the hardware cursor) and the
+  // reverse-video block it draws as the caret. What must not survive is the
+  // payload that came in: the pasted color sequence and the bell.
+  const drawn = panel.render(100).join('\n').split(CURSOR_MARKER).join('');
+  assert.doesNotMatch(drawn, /\x1b\[31m|\x07/, 'the pasted controls never reach the screen');
+  assert.match(drawn, /read the queue now/, 'the words do');
+  panel.handleInput('\r');
+  assert.equal(steered.length, 1);
+  assert.doesNotMatch(steered[0], /[\x00-\x1f\x7f]/, 'and nothing raw reaches the child either');
+  await rm(root, { recursive: true, force: true });
+});
+
+test('a failed final read is retried, so the takeover shows how the job ended', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-retry-'));
+  const file = join(root, 'child.jsonl');
+  await writeFile(file, 'x');
+  const store = { job: job({ name: 'Omar', sessionFile: file }) };
+  const calls: number[] = [];
+  const { tui: tt } = tui();
+  const panel = agentsPanel({
+    ledger: () => ledger([store.job]),
+    cancel: async () => {},
+    steer: async () => true,
+    transcript: async () => {
+      calls.push(calls.length + 1);
+      if (calls.length === 1) throw new Error('EBUSY');
+      return [{ who: 'agent' as const, text: 'the last word' }];
+    },
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
+  panel.handleInput('\r');
+  // The job settles while it is being watched; the first read fails.
+  store.job = { ...store.job, state: 'completed', settled: 10 };
+  const deadline = Date.now() + 3_000;
+  while (!panel.render(100).join('\n').includes('the last word')) {
+    assert.ok(Date.now() < deadline, 'a failed read is not the last word');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(calls.length >= 2, 'the retry happened');
+  await rm(root, { recursive: true, force: true });
+});
+
+test('the panel is Focusable and hands the focus to its embedded editor', () => {
+  const live = job({ name: 'Omar' });
+  const { tui: tt } = tui();
+  const panel = agentsPanel({ ledger: () => ledger([live]), cancel: async () => {}, steer: async () => true }, tt, theme, () => {});
+  panel.focused = true;
+  assert.equal(panel.focused, true, 'the container reports what the editor holds');
+  panel.focused = false;
+  assert.equal(panel.focused, false);
+  panel.dispose();
 });

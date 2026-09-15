@@ -1,9 +1,9 @@
 import { DynamicBorder, type Theme } from '@earendil-works/pi-coding-agent';
 import type { ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
-import { Input, Key, matchesKey, truncateToWidth, type Component, type TUI } from '@earendil-works/pi-tui';
+import { Input, Key, matchesKey, truncateToWidth, type Component, type Focusable, type TUI } from '@earendil-works/pi-tui';
 import { reportLines, seconds, spent, stateColor } from './render.ts';
 import { isTerminal, type Job, type Ledger } from './schema.ts';
-import { plain } from './text.ts';
+import { clipGraphemes, plain } from './text.ts';
 import { readTranscript, type TranscriptEntry } from './transcript.ts';
 
 /**
@@ -21,6 +21,8 @@ export type PanelSource = {
   cancel: (jobId: string, reason: string) => Promise<void>;
   /** Words for a live child. False when there is nobody to hear them. */
   steer: (jobId: string, message: string) => Promise<boolean>;
+  /** Injected by the tests; the real one reads the child's session file. */
+  transcript?: (file: string) => Promise<TranscriptEntry[]>;
 };
 
 /** One visible row: a job and the depth it is drawn at, in tree order. */
@@ -40,9 +42,9 @@ const TRANSCRIPT_LINES = 12;
 const DRAFT_MAX = 240;
 
 /** Words a person typed, made safe for a terminal and for the child. */
-const clean = (text: string): string => plain(text).replace(/\s+/g, ' ').trim().slice(0, DRAFT_MAX);
+const clean = (text: string): string => clipGraphemes(plain(text).replace(/\s+/g, ' ').trim(), DRAFT_MAX);
 
-export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: () => void): Component & { dispose(): void; handleInput(data: string): void } {
+export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: () => void): Component & Focusable & { dispose(): void; handleInput(data: string): void } {
   const state = {
     selected: 0,
     /** The settled job whose report is unfolded, by id. One at a time is enough. */
@@ -53,6 +55,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     transcript: [] as TranscriptEntry[],
     /** One last read has been taken since the watched job settled. */
     finalRead: false,
+    /** One read at a time: a slow file must never overlap its own retry. */
+    reading: false,
   };
   /**
    * The draft line is pi-tui's own editor: IME compositions, grapheme-safe
@@ -61,6 +65,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
    */
   const input = new Input({ prompt: '› ' });
   input.focused = false;
+  const read = source.transcript ?? readTranscript;
   const border = new DynamicBorder((s: string) => theme.fg('accent', s));
 
   const watched = (): Job | undefined =>
@@ -70,15 +75,22 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     // A takeover refreshes its transcript from the file, which is the honest
     // record; a job whose file never appeared keeps its panel, not a live view.
     const job = watched();
-    if (job?.sessionFile && (!isTerminal(job.state) || !state.finalRead)) {
-      if (isTerminal(job.state)) state.finalRead = true;
-      const file = job.sessionFile;
-      const id = job.id;
+    if (job?.sessionFile && !state.reading && (!isTerminal(job.state) || !state.finalRead)) {
+      const { id, sessionFile: file } = job;
+      const settled = isTerminal(job.state);
+      state.reading = true;
       // The user may have moved to another job before this read resolves:
-      // only the job that asked for it gets its transcript.
-      void readTranscript(file)
-        .then(entries => { if (state.watching === id) state.transcript = entries; })
-        .catch(() => undefined);
+      // only the job that asked for it gets its transcript. And the last read
+      // of a settled job is marked done only once it succeeds — a failed one
+      // must stay retryable, or the takeover never shows how the job ended.
+      void read(file)
+        .then(entries => {
+          if (state.watching !== id) return;
+          state.transcript = entries;
+          if (settled) state.finalRead = true;
+        })
+        .catch(() => undefined)
+        .finally(() => { state.reading = false; });
     }
     tui.requestRender();
   }, REPAINT_MS);
@@ -148,6 +160,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     state.transcript = [];
     state.notice = '';
     state.finalRead = false;
+    state.reading = false;
     input.setValue('');
     input.focused = false;
   };
@@ -175,8 +188,12 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       return;
     }
     input.handleInput(data);
-    // The cap lives at input time too: the editor never holds an epic.
-    if (input.getValue().length > DRAFT_MAX) input.setValue(input.getValue().slice(0, DRAFT_MAX));
+    // What the editor holds is what it renders, and a bracketed paste can put
+    // raw control sequences in it. So the value is sanitized where it enters,
+    // not where it leaves: no controls on the screen, and no epic in memory.
+    const typed = input.getValue();
+    const safe = clipGraphemes(plain(typed), DRAFT_MAX);
+    if (safe !== typed) input.setValue(safe);
   };
 
   const listKeys = (data: string): void => {
@@ -224,8 +241,14 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   return {
     render,
     handleInput,
-    invalidate() {},
+    invalidate() { input.invalidate(); },
     dispose() { clearInterval(repaint); },
+    /**
+     * Focusable, propagated: the hardware cursor has to sit inside the
+     * embedded editor or an IME candidate window is drawn in the wrong place.
+     */
+    get focused(): boolean { return input.focused; },
+    set focused(value: boolean) { input.focused = value; },
   };
 }
 

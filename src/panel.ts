@@ -57,6 +57,12 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     finalRead: false,
     /** One read at a time: a slow file must never overlap its own retry. */
     reading: false,
+    /**
+     * Which read owns the lock. Leaving a takeover abandons the read in
+     * flight by moving this on, so it can neither assign a stale transcript
+     * nor release a lock that now belongs to another job.
+     */
+    readSeq: 0,
   };
   /**
    * The draft line is pi-tui's own editor: IME compositions, grapheme-safe
@@ -65,6 +71,10 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
    */
   const input = new Input({ prompt: '› ' });
   input.focused = false;
+  const PASTE_START = '\x1b[200~';
+  const PASTE_END = '\x1b[201~';
+  /** Our bounded paste buffer; bracketed paste is never buffered by Input. */
+  const paste = { open: false, value: '' };
   const read = source.transcript ?? readTranscript;
   const border = new DynamicBorder((s: string) => theme.fg('accent', s));
 
@@ -79,18 +89,21 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       const { id, sessionFile: file } = job;
       const settled = isTerminal(job.state);
       state.reading = true;
-      // The user may have moved to another job before this read resolves:
-      // only the job that asked for it gets its transcript. And the last read
-      // of a settled job is marked done only once it succeeds — a failed one
-      // must stay retryable, or the takeover never shows how the job ended.
+      state.readSeq += 1;
+      const owns = state.readSeq;
+      // A read belongs to the job that started it, and only while that job is
+      // still the one being watched under the same generation: an abandoned
+      // read assigns nothing and releases nothing. And the last read of a
+      // settled job is marked done only once it succeeds — a failed one must
+      // stay retryable, or the takeover never shows how the job ended.
       void read(file)
         .then(entries => {
-          if (state.watching !== id) return;
+          if (state.watching !== id || state.readSeq !== owns) return;
           state.transcript = entries;
           if (settled) state.finalRead = true;
         })
         .catch(() => undefined)
-        .finally(() => { state.reading = false; });
+        .finally(() => { if (state.readSeq === owns) state.reading = false; });
     }
     tui.requestRender();
   }, REPAINT_MS);
@@ -160,7 +173,13 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     state.transcript = [];
     state.notice = '';
     state.finalRead = false;
+    // Moving the generation on abandons whatever read is in flight: it will
+    // neither paint a transcript for a job nobody is watching, nor clear a
+    // lock that the next takeover is about to take.
+    state.readSeq += 1;
     state.reading = false;
+    paste.open = false;
+    paste.value = '';
     input.setValue('');
     input.focused = false;
   };
@@ -179,6 +198,50 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     );
   };
 
+  /** The value Input owns is always safe and bounded before it can render. */
+  const boundInput = (): void => {
+    const typed = input.getValue();
+    const safe = clipGraphemes(plain(typed), DRAFT_MAX);
+    if (safe !== typed) input.setValue(safe);
+  };
+
+  /**
+   * Bracketed paste is parsed outside Input. Its private paste buffer has no
+   * limit, so an absent closing marker could otherwise retain input forever.
+   * Our accumulator never holds more than one steer and only the sanitized
+   * words are inserted into Input once the closing marker arrives.
+   */
+  const appendPaste = (content: string): void => {
+    const cleaned = plain(`${paste.value}${content}`);
+    const bounded = clipGraphemes(cleaned, DRAFT_MAX);
+    if (bounded !== cleaned) state.notice = 'That paste was too large; the rest was dropped.';
+    paste.value = bounded;
+  };
+  const commitPaste = (): void => {
+    const value = paste.value;
+    paste.open = false;
+    paste.value = '';
+    if (value) input.handleInput(value);
+    boundInput();
+  };
+  const feedInput = (data: string): void => {
+    // Split once and walk: a malicious chunk with many marker pairs cannot
+    // turn parser recursion into a stack overflow.
+    for (const token of data.split(/(\x1b\[200~|\x1b\[201~)/)) {
+      if (!token) continue;
+      if (token === PASTE_START) {
+        if (!paste.open) { paste.open = true; paste.value = ''; }
+      } else if (token === PASTE_END) {
+        if (paste.open) commitPaste();
+      } else if (paste.open) {
+        appendPaste(token);
+      } else {
+        input.handleInput(token);
+        boundInput();
+      }
+    }
+  };
+
   const takeOverKeys = (data: string): void => {
     const job = watched();
     if (!job) { leave(); return; }
@@ -187,13 +250,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       if (matchesKey(data, Key.escape)) leave();
       return;
     }
-    input.handleInput(data);
-    // What the editor holds is what it renders, and a bracketed paste can put
-    // raw control sequences in it. So the value is sanitized where it enters,
-    // not where it leaves: no controls on the screen, and no epic in memory.
-    const typed = input.getValue();
-    const safe = clipGraphemes(plain(typed), DRAFT_MAX);
-    if (safe !== typed) input.setValue(safe);
+    feedInput(data);
   };
 
   const listKeys = (data: string): void => {

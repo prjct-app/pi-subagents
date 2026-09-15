@@ -20,18 +20,19 @@ export function plain(text: unknown): string {
  * walk is the fallback where it is missing.
  */
 export function clipGraphemes(text: string, limit: number): string {
+  if (limit <= 0) return '';
   const out: string[] = [];
   const full = (): boolean => out.length >= limit;
   if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
     for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) {
-      out.push(segment);
       if (full()) break;
+      out.push(segment);
     }
     return out.join('');
   }
   for (const unit of text) {
-    out.push(unit);
     if (full()) break;
+    out.push(unit);
   }
   return out.join('');
 }

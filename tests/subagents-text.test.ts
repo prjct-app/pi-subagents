@@ -9,6 +9,8 @@ test('a cap counts what a person sees, never UTF-16 units', () => {
   // A combining accent belongs to the letter it modifies.
   assert.equal(clipGraphemes('ébc', 1), 'é');
   assert.equal(clipGraphemes('ab', 10), 'ab', 'a short text is returned whole');
+  assert.equal(clipGraphemes('abc', 0), '', 'zero means no graphemes, not one');
+  assert.equal(clipGraphemes('abc', -1), '', 'a negative limit is empty too');
   assert.equal(clipGraphemes('', 5), '');
 });
 

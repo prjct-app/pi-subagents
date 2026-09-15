@@ -244,3 +244,87 @@ test('the panel is Focusable and hands the focus to its embedded editor', () => 
   assert.equal(panel.focused, false);
   panel.dispose();
 });
+
+
+test('an abandoned transcript read cannot release the next job read lock', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-read-owner-'));
+  const fileA = join(root, 'a.jsonl');
+  const fileB = join(root, 'b.jsonl');
+  await Promise.all([writeFile(fileA, 'a'), writeFile(fileB, 'b')]);
+  const a = job({ name: 'Ada', sessionFile: fileA });
+  const b = job({ name: 'Omar', sessionFile: fileB });
+  const store = { jobs: [a, b] };
+  const deferred = () => {
+    const slot = { resolve: (_entries: { who: 'agent'; text: string }[]) => {} };
+    const promise = new Promise<{ who: 'agent'; text: string }[]>(resolve => { slot.resolve = resolve; });
+    return { promise, resolve: slot.resolve };
+  };
+  const readA = deferred();
+  const readB = deferred();
+  const reads: string[] = [];
+  const { tui: tt } = tui();
+  const panel = agentsPanel({
+    ledger: () => ledger(store.jobs),
+    cancel: async () => {},
+    steer: async () => true,
+    transcript: file => {
+      reads.push(file);
+      return file === fileA ? readA.promise : readB.promise;
+    },
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
+  panel.handleInput('\r');
+  const waitFor = async (predicate: () => boolean): Promise<void> => {
+    const deadline = Date.now() + 3_000;
+    while (!predicate()) {
+      assert.ok(Date.now() < deadline, 'the expected repaint happened');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  };
+  await waitFor(() => reads.filter(file => file === fileA).length === 1);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b[B');
+  panel.handleInput('\r');
+  store.jobs = [a, { ...b, state: 'completed', settled: 10 }];
+  await waitFor(() => reads.filter(file => file === fileB).length === 1);
+
+  // Ada's abandoned read resolves after Omar owns the lock. It must not clear
+  // Omar's lock and allow a second, overlapping read to start.
+  readA.resolve([{ who: 'agent', text: 'stale Ada transcript' }]);
+  await new Promise(resolve => setTimeout(resolve, 650));
+  assert.equal(reads.filter(file => file === fileB).length, 1);
+  assert.doesNotMatch(panel.render(100).join('\n'), /stale Ada transcript/);
+
+  readB.resolve([{ who: 'agent', text: 'Omar final transcript' }]);
+  await waitFor(() => panel.render(100).join('\n').includes('Omar final transcript'));
+  await new Promise(resolve => setTimeout(resolve, 550));
+  assert.equal(reads.filter(file => file === fileB).length, 1, 'the final read stays final');
+  await rm(root, { recursive: true, force: true });
+});
+
+test('an unterminated bracketed paste stays bounded and never traps the editor', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-open-paste-'));
+  const file = join(root, 'child.jsonl');
+  await writeFile(file, 'x');
+  const live = job({ name: 'Omar', sessionFile: file });
+  const steered: string[] = [];
+  const { tui: tt } = tui();
+  const panel = agentsPanel({
+    ledger: () => ledger([live]),
+    cancel: async () => {},
+    steer: async (_id, message) => { steered.push(message); return true; },
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
+  panel.handleInput('\r');
+  panel.handleInput('\x1b[200~' + 'x'.repeat(1_000));
+  for (const _ of Array.from({ length: 100 })) panel.handleInput('y'.repeat(1_000));
+  assert.match(panel.render(100).join('\n'), /paste was too large/);
+  panel.handleInput('\x1b[201~');
+  panel.handleInput('\r');
+  assert.equal(steered[0]?.length, 240, 'the whole unterminated stream retained one bounded steer');
+  panel.handleInput('o');
+  panel.handleInput('k');
+  panel.handleInput('\r');
+  assert.equal(steered[1], 'ok', 'the forced boundary did not leave Input in paste mode');
+  await rm(root, { recursive: true, force: true });
+});

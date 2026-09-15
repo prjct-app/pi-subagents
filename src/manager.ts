@@ -184,6 +184,13 @@ export function starting(ledger: Ledger, jobId: string, now: number): Ledger {
   return replace(ledger, { ...job, state: 'starting', started: now });
 }
 
+/** Where the child's transcript lives, learned once it answers get_state. */
+export function noteSession(ledger: Ledger, jobId: string, file: string): Ledger {
+  const job = find(ledger, jobId);
+  if (!job || isTerminal(job.state)) return ledger;
+  return replace(ledger, { ...job, sessionFile: file });
+}
+
 /** The child chose its own model; the job says what it is actually running on. */
 export function remodel(ledger: Ledger, jobId: string, provider: string, modelId: string): Ledger {
   const job = find(ledger, jobId);

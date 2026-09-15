@@ -83,6 +83,10 @@ function fakeChild() {
         child.say({ type: 'response', command: 'prompt', id: message.id,
           success: !child.refuses, ...(child.refuses ? { error: child.refuses } : {}) });
       }
+      if (message.type === 'get_state') {
+        child.say({ type: 'response', command: 'get_state', id: message.id, success: true,
+          data: { sessionFile: '/fake/session.jsonl' } });
+      }
       if (message.type === 'get_session_stats') {
         child.say({ type: 'response', command: 'get_session_stats', id: message.id, success: true, data: child.price });
       }
@@ -232,7 +236,7 @@ test('an accepted report ends the run, priced, without waiting for the last word
   // Nothing waits for an `agent_settled` that would only cost another answer:
   // a child that has reported has nothing left to do.
   assert.equal(child.sent.some((message: any) => message.type === 'get_session_stats'), true);
-  assert.deepEqual(events.map(event => event.type), ['running', 'report', 'settled']);
+  assert.deepEqual(events.map(event => event.type), ['running', 'session', 'report', 'settled']);
 });
 
 test('a report its own guard rejected is not forwarded, and the child keeps going', async () => {
@@ -527,4 +531,11 @@ test('a child cannot switch to a model the session was not given', async () => {
   assert.match(JSON.parse(replies(run.child)[0].value).text, /not a model this session has/);
   assert.equal(run.child.sent.filter((message: any) => message.type === 'set_model').length, before,
     'a scoped session scopes its children: no set_model left the parent');
+});
+
+test('the child says where its transcript lives, and the job carries it', async () => {
+  const run = await started({}, live);
+  await until('it is running', () => run.events.some(event => event.type === 'running'));
+  assert.ok(run.events.some(event => event.type === 'session' && event.file === '/fake/session.jsonl'),
+    'best-effort, once the task is accepted');
 });

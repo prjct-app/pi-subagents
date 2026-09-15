@@ -61,6 +61,8 @@ export type JobsHandle = {
   lines: () => string[];
   ledger: () => Ledger | undefined;
   cancel: (jobId: string, reason: string) => Promise<void>;
+  /** Words for a live child, from a person at the panel. */
+  steer: (jobId: string, message: string) => Promise<boolean>;
 };
 
 export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHandle {
@@ -535,6 +537,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     lines: () => ledgerLines(state.jobs?.ledger()),
     ledger: () => state.jobs?.ledger(),
     cancel: async (jobId, reason) => { await state.jobs?.cancel(jobId, reason); },
+    steer: async (jobId, message) => await state.jobs?.steerTo(jobId, message) ?? false,
   };
   pi.registerCommand('agents', {
     description: 'Watch and control the subagents this session delegated; /agents auto on|off toggles auto-delegation',

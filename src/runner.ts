@@ -33,7 +33,9 @@ export type RunnerEvent =
   /** Diagnostic. The terminal event above is what settles a job, not this. */
   | { type: 'exit'; code: number | null }
   /** The child chose its own model; the job should say what it is running on. */
-  | { type: 'model'; provider: string; modelId: string };
+  | { type: 'model'; provider: string; modelId: string }
+  /** Where the child's transcript lives. Best-effort: the panel reads it live. */
+  | { type: 'session'; file: string };
 
 export type Handle = {
   /** Ask it to stop, then make sure it stopped. Safe to call twice. */
@@ -551,6 +553,15 @@ export function spawnRunner(options: {
     }
 
     emit({ type: 'running' });
+
+    /**
+     * Where the child's transcript lives, for the takeover view. Best-effort:
+     * a child that never answers still has a panel, just not a live one.
+     */
+    const where = await within(1_500, send({ type: 'get_state' }), { success: false } as Record<string, unknown>);
+    const file = (where as Record<string, any>).data?.sessionFile;
+    if (where.success === true && typeof file === 'string') emit({ type: 'session', file });
+
     return { stop, steer };
   };
 }

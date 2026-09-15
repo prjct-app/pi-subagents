@@ -202,6 +202,8 @@ export type Job = {
   rootId?: string;
   /** The delegation tree's wire: siblings reach each other through it. */
   wire?: string;
+  /** The child's session file: what the takeover view reads, live. */
+  sessionFile?: string;
   /** Who admitted it. Absent on a job the session itself delegated. */
   parentJobId?: string;
   depth: number;
@@ -240,6 +242,8 @@ export const JobSchema = Type.Object({
   rootId: Type.Optional(id),
   /** The delegation tree's wire file. Every job in a tree shares one. */
   wire: Type.Optional(id),
+  /** The child's own session file, once it says where it is. */
+  sessionFile: Type.Optional(Type.String({ maxLength: 4096 })),
   parentJobId: Type.Optional(id),
   depth: Type.Integer({ minimum: 0, maximum: 8 }),
   key: Type.Optional(id),

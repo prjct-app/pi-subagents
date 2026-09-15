@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { agentsPanel, rows } from '../src/panel.ts';
 import { newJobId, type Job, type Ledger } from '../src/schema.ts';
@@ -31,13 +34,14 @@ test('rows come in tree order with the depth they are drawn at', () => {
   assert.deepEqual(rows(undefined), []);
 });
 
-test('the panel renders the ledger, moves, unfolds a report, and closes on escape', () => {
+test('the panel renders the ledger, moves, unfolds a report, and closes on escape', (t) => {
   const done = job({ name: 'Ada', state: 'completed', settled: 10,
     report: { outcome: 'completed', summary: 'Mapped it.', criteria: [], findings: [], blockers: [] } });
   const live = job({ name: 'Omar' });
-  const { state, tui: t } = tui();
+  const { state, tui: tt } = tui();
   const closed: null[] = [];
-  const panel = agentsPanel({ ledger: () => ledger([done, live]), cancel: async () => {} }, t, theme, () => closed.push(null));
+  const panel = agentsPanel({ ledger: () => ledger([done, live]), cancel: async () => {}, steer: async () => true }, tt, theme, () => closed.push(null));
+  t.after(() => panel.dispose());
   const text = panel.render(100).join('\n');
   assert.match(text, /2 live · 2 total|1 live · 2 total/);
   assert.match(text, /Ada/);
@@ -52,23 +56,70 @@ test('the panel renders the ledger, moves, unfolds a report, and closes on escap
   panel.handleInput('\x1b');
   assert.equal(closed.length, 1, 'escape closes the panel');
   assert.ok(state.renders > 0, 'every key repaints');
-  panel.dispose();
 });
 
-test('x stops the selected live job through the same cancel path, never a settled one', async () => {
+test('x stops the selected live job through the same cancel path, never a settled one', async (t) => {
   const settled = job({ name: 'Ada', state: 'completed', settled: 10 });
   const live = job({ name: 'Omar' });
   const stopped: { id: string; reason: string }[] = [];
-  const { tui: t } = tui();
+  const { tui: tt } = tui();
   const panel = agentsPanel({
     ledger: () => ledger([settled, live]),
     cancel: async (jobId, reason) => { stopped.push({ id: jobId, reason }); },
-  }, t, theme, () => {});
+    steer: async () => true,
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
   panel.handleInput('x');
   assert.deepEqual(stopped, [], 'a settled job is not stopped again');
   panel.handleInput('\x1b[B');
   panel.handleInput('x');
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(stopped, [{ id: live.id, reason: 'Stopped from the agents panel.' }]);
-  panel.dispose();
+});
+
+test('enter on a live job takes over its transcript, typing steers it, esc returns', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-takeover-'));
+  const file = join(root, 'child.jsonl');
+  await writeFile(file, [
+    JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Map the store.' }] } }),
+    JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Reading src/store.' }] } }),
+  ].join('\n'));
+  const live = job({ name: 'Omar', sessionFile: file });
+  const steered: string[] = [];
+  const { tui: tt } = tui();
+  const panel = agentsPanel({
+    ledger: () => ledger([live]),
+    cancel: async () => {},
+    steer: async (_id, message) => { steered.push(message); return true; },
+  }, tt, theme, () => {});
+  t.after(() => panel.dispose());
+
+  panel.handleInput('\r');
+  // The transcript loads from the file, asynchronously, on open and on repaint.
+  const deadline = Date.now() + 1_000;
+  while (panel.render(100).join('\n').includes('Nothing on the transcript yet.')) {
+    assert.ok(Date.now() < deadline, 'the transcript arrived');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const view = panel.render(100).join('\n');
+  assert.match(view, /Map the store\./, 'the transcript is the child\'s own file');
+  assert.match(view, /Reading src\/store\./);
+  assert.match(view, /type to steer/);
+
+  for (const key of 'focus the queue') panel.handleInput(key);
+  panel.handleInput('\r');
+  assert.deepEqual(steered, ['focus the queue']);
+
+  panel.handleInput('\x1b');
+  assert.doesNotMatch(panel.render(100).join('\n'), /type to steer/, 'esc returns to the list');
+  await rm(root, { recursive: true, force: true });
+});
+
+test('enter on a live job without a transcript says so instead of opening an empty view', (t) => {
+  const live = job({ name: 'Omar' });
+  const { tui: t2 } = tui();
+  const panel = agentsPanel({ ledger: () => ledger([live]), cancel: async () => {}, steer: async () => true }, t2, theme, () => {});
+  t.after(() => panel.dispose());
+  panel.handleInput('\r');
+  assert.match(panel.render(100).join('\n'), /has not said where its transcript lives/);
 });

@@ -51,13 +51,16 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     /** Takeover: the live job being watched. */
     watching: undefined as string | undefined,
     transcript: [] as TranscriptEntry[],
+    /** One last read has been taken since the watched job settled. */
+    finalRead: false,
   };
   /**
    * The draft line is pi-tui's own editor: IME compositions, grapheme-safe
    * backspace and pastes are its problem, and it solves them properly.
    * What is rendered and what is steered still passes through clean().
    */
-  const input = new Input();
+  const input = new Input({ prompt: '› ' });
+  input.focused = false;
   const border = new DynamicBorder((s: string) => theme.fg('accent', s));
 
   const watched = (): Job | undefined =>
@@ -67,7 +70,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     // A takeover refreshes its transcript from the file, which is the honest
     // record; a job whose file never appeared keeps its panel, not a live view.
     const job = watched();
-    if (job?.sessionFile && !isTerminal(job.state)) {
+    if (job?.sessionFile && (!isTerminal(job.state) || !state.finalRead)) {
+      if (isTerminal(job.state)) state.finalRead = true;
       const file = job.sessionFile;
       const id = job.id;
       // The user may have moved to another job before this read resolves:
@@ -120,7 +124,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       ? [theme.fg('dim', job.sessionFile ? 'Nothing on the transcript yet.' : 'This job never said where its transcript lives.')]
       : state.transcript.slice(-TRANSCRIPT_LINES).map(entry => `${who(entry)} ${plain(entry.text)}`);
     const settled = isTerminal(job.state);
-    const draft = settled ? '' : `${theme.fg('accent', '›')} ${plain(input.getValue())}▏`;
+    const draft = settled ? [] : input.render(width);
     const footer = settled
       ? theme.fg('dim', `${plain(job.name)} settled as ${job.state} · esc back`)
       : theme.fg('dim', `${state.notice ? `${state.notice} · ` : ''}type to steer · enter send · esc back`);
@@ -128,7 +132,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       ...border.render(width),
       truncateToWidth(theme.fg('accent', theme.bold(head)), width),
       ...body.map(text => truncateToWidth(text, width)),
-      ...(draft ? [truncateToWidth(draft, width)] : []),
+      ...draft,
       truncateToWidth(footer, width),
       ...border.render(width),
     ];
@@ -143,7 +147,9 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     state.watching = undefined;
     state.transcript = [];
     state.notice = '';
+    state.finalRead = false;
     input.setValue('');
+    input.focused = false;
   };
   input.onEscape = leave;
   input.onSubmit = value => {
@@ -151,9 +157,12 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const words = clean(value);
     input.setValue('');
     if (!job || !words || isTerminal(job.state)) return;
+    const name = plain(job.name);
+    // The notice names who it is about, so a late answer can never be
+    // mistaken for a verdict on whoever is on screen when it lands.
     void source.steer(job.id, words).then(
-      sent => { state.notice = sent ? 'Steered.' : `${plain(job.name)} could not hear it.`; },
-      () => { state.notice = `${plain(job.name)} could not hear it.`; },
+      sent => { state.notice = sent ? `Steered ${name}.` : `${name} could not hear it.`; },
+      () => { state.notice = `${name} could not hear it.`; },
     );
   };
 
@@ -166,6 +175,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       return;
     }
     input.handleInput(data);
+    // The cap lives at input time too: the editor never holds an epic.
+    if (input.getValue().length > DRAFT_MAX) input.setValue(input.getValue().slice(0, DRAFT_MAX));
   };
 
   const listKeys = (data: string): void => {
@@ -180,6 +191,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
         state.watching = target.id;
         state.transcript = [];
         state.notice = '';
+        state.finalRead = false;
+        input.focused = true;
         return;
       }
       if (!isTerminal(target.state)) {

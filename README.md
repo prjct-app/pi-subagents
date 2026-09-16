@@ -122,7 +122,7 @@ the parent session starts again.
   "limits": {
     "concurrency": 2,
     "jobs": 64,
-    "timeoutMs": 300000,
+    "timeoutMs": 600000,
     "depth": 2,
     "descendants": 4,
     "taskBytes": 24576
@@ -132,8 +132,9 @@ the parent session starts again.
 
 `jobs` is a cumulative per-parent-session budget, including continuations;
 completed jobs do not refund it. Concurrency is a separate live capacity limit.
-The clock covers the entire tree from admission, including queued time.
-Supported maxima are 16 concurrent jobs, 256 session runs, depth 8, 64 descendants,
+The clock covers the entire tree from admission, including queued time. Running roots receive
+best-effort reminders at 60% and 85% of that budget so they narrow scope and report before
+the hard deadline. Supported maxima are 16 concurrent jobs, 256 session runs, depth 8, 64 descendants,
 24 hours per tree and 48 KiB of task plus context. Session retention accepts 1–365 days;
 external workspace retention accepts 1–720 hours. `artifactPolicy` is `requested` by
 default or `none` to disable product-documentation artifacts.

@@ -31,7 +31,7 @@ export const DEFAULT_LIMITS: Limits = {
   concurrency: 2,
   jobs: 64,
   taskBytes: 24 * 1024,
-  timeoutMs: 5 * 60_000,
+  timeoutMs: 10 * 60_000,
   depth: 2,
   descendants: 4,
 };

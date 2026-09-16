@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Reworked `/agents` into a bounded, content-first panel with one-row agent lists, explicit pane focus, compact contextual controls, confirmed stop actions and usable layouts down to 40×12 terminals.
+- Reduce the editor status widget to compact text symbols (`●`, `○`, `!`) and hide it as soon as no subagent is running; completed attention items remain available in `/agents` without occupying the chat.
+
 ## 0.2.0
 
 - Replaced the agent list with a responsive two-pane TUI: search, filters, collapsible trees, activity/history scrolling, full evidence and execution details.

@@ -39,13 +39,15 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   const available = options.models ?? [model('openai-codex', 'gpt-5.4-mini', 0.25), model('anthropic', 'claude-opus-4-5', 5)];
 
   const notices: string[] = [];
+  const widgets: Array<string[] | undefined> = [];
   const ctx: any = {
     cwd: '/work',
+    hasUI: true,
     model: available.at(-1),
     modelRegistry: { getAvailable: () => available },
     scopedModels: (options.scoped ?? []).map(value => ({ model: value })),
     isIdle: () => session.idle,
-    ui: { notify: (text: string) => { notices.push(text); }, setWidget: () => undefined },
+    ui: { notify: (text: string) => { notices.push(text); }, setWidget: (_id: string, value: string[] | undefined) => { widgets.push(value); } },
     sessionManager: {
       getSessionId: () => 's1',
       getBranch: () => [...entries.map(entry => ({ type: 'custom', customType: entry.customType, data: entry.data })), ...sent.map(({ message }) => ({ type: 'custom_message', ...message }))],
@@ -71,7 +73,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
   };
   return {
-    pi, tools, entries, sent, runs, renderers, ctx, session, made, notices, commands,
+    pi, tools, entries, sent, runs, renderers, ctx, session, made, notices, widgets, commands,
     emit,
     of: (job: Job) => runs.get(job.id)!,
     ledger: () => entries.filter(entry => entry.customType === 'agent-jobs').at(-1)?.data,
@@ -94,6 +96,19 @@ test('delegating starts a child and says plainly not to wait for it', async () =
   assert.match(result.content[0].text, /do not wait for it/);
   assert.equal(result.details.state, 'queued');
   assert.equal(h.ledger().jobs.length, 1, 'and the ledger reaches the session file');
+});
+
+test('the editor widget exists only while a subagent is running', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'resume' });
+  const job = (await h.delegate()).details as Job;
+  h.of(job).emit({ type: 'running' });
+  await settleTick();
+  assert.equal(h.widgets.find(widget => widget !== undefined)?.[0], '󰚩  Agents  ● 1  /agents');
+
+  h.of(job).emit({ type: 'settled', report: good({ outcome: 'blocked', blockers: ['Needs a decision.'] }) });
+  await settleTick();
+  assert.equal(h.widgets.at(-1), undefined, 'historical attention must not keep the widget above the editor');
 });
 
 test('bash is inherited only after the operator opts a writable child in', async (t) => {

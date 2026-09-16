@@ -49,11 +49,12 @@ function ansiHtml(text: string): string {
 if (process.argv.includes('--snapshot')) {
   const cards: string[] = [];
   const metrics: number[] = [];
-  for (const [width, height, key, title] of [[120, 40, '', 'Live overview · 120 × 40'], [120, 40, 'result', 'Evidence and blockers'], [80, 24, '', 'Compact terminal · 80 × 24'], [60, 20, 'message', 'Multiline message · 60 × 20'], [160, 50, '', 'Wide terminal · 160 × 50']] as const) {
+  for (const [width, height, key, title] of [[120, 40, '', 'Live overview · 120 × 40'], [120, 40, 'result', 'Evidence and blockers'], [80, 24, '', 'Compact terminal · 80 × 24'], [40, 12, '', 'Tiny terminal · 40 × 12'], [40, 12, 'result', 'Tiny detail · 40 × 12'], [60, 20, 'message', 'Multiline message · 60 × 20'], [160, 50, '', 'Wide terminal · 160 × 50']] as const) {
     const panel = agentsPanel(source, { terminal: { rows: height }, requestRender() {} } as any, theme, () => {});
     if (key === 'result') { panel.handleInput('j'); panel.handleInput('j'); panel.handleInput('2'); }
     if (key === 'message') { panel.handleInput('s'); panel.handleInput('Check the shutdown race\nand keep the report intact.'); }
-    const start = performance.now(); const lines = panel.render(width); metrics.push(performance.now() - start); panel.dispose();
+    const panelWidth = Math.min(110, width - 2);
+    const start = performance.now(); const lines = panel.render(panelWidth); metrics.push(performance.now() - start); panel.dispose();
     cards.push(`<section><h2>${title}</h2><pre>${ansiHtml(lines.join('\n'))}</pre></section>`);
   }
   await mkdir('build', { recursive: true });

@@ -51,9 +51,12 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   const accent = (text: string): string => theme.fg('accent', text);
   const request = (): void => { if (!state.disposed) tui.requestRender(); };
   // A small editor viewport preserves space for activity even with a long draft.
-  const editorTui = Object.create(tui) as TUI;
-  Object.defineProperty(editorTui, 'terminal', { value: { rows: 16 } });
-  editorTui.requestRender = request;
+  // Define overrides directly: pi supplies a forwarding Proxy whose setter would otherwise
+  // replace the real TUI's requestRender and make request() recurse into itself.
+  const editorTui = Object.create(tui, {
+    terminal: { value: { rows: 16 } },
+    requestRender: { value: request },
+  }) as TUI;
   const editor = new Editor(editorTui, { borderColor: dim, selectList: { selectedPrefix: accent, selectedText: accent, description: dim, scrollInfo: dim, noMatch: dim } }, { paddingX: 0 });
   editor.disableSubmit = true;
   const search = new Input({ prompt: '/ ' });

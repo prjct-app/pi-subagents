@@ -24,6 +24,26 @@ function harness(jobs: Job[] = [job()], over: Partial<PanelSource> = {}, height 
   return { panel, store, text: (width = 120) => panel.render(width).join('\n') };
 }
 
+test('editor render requests do not overwrite pi forwarding TUI proxies', t => {
+  const renders = { count: 0 };
+  const target = { terminal: { rows: 40 }, requestRender: () => { renders.count += 1; } };
+  const originalRequestRender = target.requestRender;
+  const tui = new Proxy({} as any, {
+    get: (_target, property) => {
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? (...args: unknown[]) => Reflect.apply(value, target, args) : value;
+    },
+    set: (_target, property, value) => Reflect.set(target, property, value, target),
+    getPrototypeOf: () => Reflect.getPrototypeOf(target),
+  });
+  const source: PanelSource = { ledger: () => ({ v: 2, session: 'test', jobs: [] }), cancel: async () => {}, steer: async () => true };
+  const panel = agentsPanel(source, tui, theme, () => {}); t.after(() => panel.dispose());
+
+  assert.equal(target.requestRender, originalRequestRender);
+  assert.doesNotThrow(() => panel.handleInput('?'));
+  assert.equal(renders.count, 1);
+});
+
 test('tree order survives missing parents and malicious cycles', () => {
   const a = job({ id: 'a' }); const b = job({ id: 'b', parentJobId: 'a' }); const c = job({ id: 'c', parentJobId: 'b' });
   assert.deepEqual(rows({ v: 2, session: 's', jobs: [c, b, a] }).map(row => [row.job.id, row.depth]), [['a', 0], ['b', 1], ['c', 2]]);

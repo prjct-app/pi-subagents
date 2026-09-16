@@ -4,6 +4,8 @@
 
 - Reworked `/agents` into a bounded, content-first panel with one-row agent lists, explicit pane focus, compact contextual controls, confirmed stop actions and usable layouts down to 40×12 terminals.
 - Reduce the editor status widget to compact text symbols (`●`, `○`, `!`) and hide it as soon as no subagent is running; completed attention items remain available in `/agents` without occupying the chat.
+- Add seven package-owned software-factory agents and nine lean playbooks for discovery, SDD/BDD, bug triage, implementation, quality, delivery and explicit product documentation.
+- Move package-owned runtime data to `~/.prjct/subagents`, isolate factory writers in external Git snapshots, and retain proposed changes as reviewable patches instead of writing client repositories.
 
 ## 0.2.0
 

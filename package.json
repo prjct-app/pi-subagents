@@ -63,6 +63,8 @@
   "files": [
     "index.ts",
     "src",
+    "factory/agents",
+    "factory/skills/*/SKILL.md",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"

@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { childPrompt, neutralCatalogue, type ModelChoice } from './context.ts';
+import { factoryAgent } from './factory.ts';
 import { read as readWire } from './wire.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
 import {
@@ -566,7 +567,8 @@ export function spawnRunner(options: {
     }
     if (job.resumeSession) state.baseline = await spent();
     const taken = await within(START_DEADLINE_MS,
-      send({ type: 'prompt', message: childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired }) }),
+      send({ type: 'prompt', message: childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired,
+        ...(job.agent ? { profile: factoryAgent(job.agent).instructions } : {}) }) }),
       { success: false, error: 'it never answered' } as Record<string, unknown>);
     if (taken.success !== true) {
       const why = String(taken.error ?? 'no reason given').slice(0, 200);

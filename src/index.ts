@@ -16,6 +16,9 @@ import { getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
 import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
+import { selectSpecificationTopics } from './checklist.ts';
+import { FACTORY_AGENTS, factoryAgent, factoryCatalogue, type FactoryAgent } from './factory.ts';
+import { cleanupExternalWorkspaces, createExternalWorkspace, discardExternalWorkspace, finalizeExternalWorkspace, type ExternalWorkspace } from './workspace.ts';
 import { spawnRunner } from './runner.ts';
 import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger, type Role } from './schema.ts';
 
@@ -45,6 +48,8 @@ export type JobsOptions = {
   complete?: (system: string, user: string, ctx: ExtensionContext) => Promise<string>;
   /** Injected by the tests; the real one lives beside the agent directory. */
   wireRoot?: string;
+  /** External factory workspaces. Defaults to ~/.prjct/subagents/workspaces. */
+  workspaceRoot?: string;
   tickMs?: number;
 };
 
@@ -129,6 +134,20 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     }
   };
 
+  const factoryTools = (profile: FactoryAgent | undefined, role: Role, available = inheritedTools(role)): string[] => {
+    if (!profile) return available;
+    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write'];
+    return available.filter(tool => safe.includes(tool) && (role === 'worker' || (READ_ONLY_TOOLS as readonly string[]).includes(tool)));
+  };
+  const resolveProfile = (agent?: string, role?: Role): { role: Role; profile?: FactoryAgent } => {
+    if (agent && role) throw new Error('Choose either a factory agent or a base role, not both.');
+    if (agent) { const profile = factoryAgent(agent); return { role: profile.role, profile }; }
+    if (role) return { role };
+    throw new Error(`Choose an agent (${FACTORY_AGENTS.join(', ')}) or a base role (${ROLES.join(', ')}).`);
+  };
+  const externalWorkspace = async (profile: FactoryAgent | undefined, source: string): Promise<ExternalWorkspace | undefined> =>
+    profile?.workspace === 'isolated' ? createExternalWorkspace(source, options.workspaceRoot) : undefined;
+
   /** A model a job may run on: the one asked for, or this session's own. */
   const resolve = (wanted?: string): { provider: string; modelId: string } | { refused: string } => {
     const current = (state.ctx as any)?.model;
@@ -208,24 +227,35 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const onDelegate = async (parent: Job, ask: DelegateAsk): Promise<DelegateAnswer> => {
     const jobs = state.jobs;
     if (!jobs) return { ok: false, text: 'The session that asked for this work is not able to start anything.' };
-    const model = resolve(ask.model);
-    if ('refused' in model) return { ok: false, text: model.refused };
-    const decision = await jobs.delegate({
-      role: ask.role, subject: ask.subject, task: ask.task, context: ask.context,
-      // A grandchild inherits what its parent was given, never more — tools,
-      // and the wire: the whole tree talks on one file.
-      tools: roleTools(ask.role, parent.tools ?? READ_ONLY_TOOLS), runner: state.settings.runner,
-      ...(parent.wire ? { wire: parent.wire } : {}),
-      ...model, cwd: parent.cwd, depth: parent.depth + 1, parentJobId: parent.id,
-      ...(parent.rootId ? { rootId: parent.rootId } : {}),
-    });
-    if (!decision.ok) return { ok: false, text: decision.reason };
-    startTicking();
-    return {
-      ok: true,
-      text: `Accepted: ${decision.job.name} is on it, beside you. It reports to the session that asked `
-        + 'for your work, not to you, so do not wait for it. Carry on with your own task.',
-    };
+    try {
+      const choice = resolveProfile(ask.agent, ask.role);
+      if (choice.profile?.explicitOnly) return { ok: false, text: `${choice.profile.name} requires an explicit request from the user.` };
+      const model = resolve(ask.model);
+      if ('refused' in model) return { ok: false, text: model.refused };
+      const workspace = await externalWorkspace(choice.profile, parent.cwd);
+      const decision = await jobs.delegate({
+        role: choice.role, ...(choice.profile ? { agent: choice.profile.name } : {}),
+        subject: ask.subject, task: ask.task, context: ask.context,
+        // A grandchild inherits what its parent was given, never more — tools,
+        // and the wire: the whole tree talks on one file.
+        tools: factoryTools(choice.profile, choice.role, roleTools(choice.role, parent.tools ?? READ_ONLY_TOOLS)), runner: state.settings.runner,
+        ...(parent.wire ? { wire: parent.wire } : {}),
+        ...model, cwd: workspace?.cwd ?? parent.cwd,
+        ...(workspace ? workspace : {}),
+        depth: parent.depth + 1, parentJobId: parent.id,
+        ...(parent.rootId ? { rootId: parent.rootId } : {}),
+      });
+      if (!decision.ok || decision.repeated) {
+        if (workspace) await discardExternalWorkspace(workspace);
+        if (!decision.ok) return { ok: false, text: decision.reason };
+      }
+      startTicking();
+      return {
+        ok: true,
+        text: `Accepted: ${decision.job.name} is on it, beside you. It reports to the session that asked `
+          + 'for your work, not to you, so do not wait for it. Carry on with your own task.',
+      };
+    } catch (error) { return { ok: false, text: String((error as Error).message ?? error).slice(0, 500) }; }
   };
 
   /**
@@ -357,7 +387,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         if (live(ledger).length > 0 || undelivered(ledger).length > 0) startTicking();
         for (const job of (options.makeRunner ? [] : ledger.jobs).filter(job => isTerminal(job.state) && !retained.has(job.id))) {
           retained.add(job.id);
-          void retainSettlement(job, directory).catch(() => retained.delete(job.id));
+          const workspace = job.patchFile ? finalizeExternalWorkspace({ cwd: job.cwd, patchFile: job.patchFile }) : Promise.resolve('');
+          void Promise.all([retainSettlement(job, directory), workspace]).catch(() => retained.delete(job.id));
         }
         showWidget();
         notify();
@@ -387,9 +418,12 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     if ('refused' in dir) throw new Error(dir.refused);
     const model = resolve(`${original.provider}/${original.modelId}`);
     if ('refused' in model) throw new Error(model.refused);
-    const result = await jobs.delegate({ role: original.role, subject: original.subject, task: message,
+    const result = await jobs.delegate({ role: original.role, ...(original.agent ? { agent: original.agent } : {}),
+      subject: original.subject, task: message,
       context: 'Continue the retained conversation. Previous reports are historical; return a new report for this request.',
-      ...model, cwd: dir.cwd, tools: allowed, depth: 0, key, rootId: original.rootId,
+      ...model, cwd: dir.cwd, ...(original.sourceCwd ? { sourceCwd: original.sourceCwd } : {}),
+      ...(original.workspace ? { workspace: original.workspace } : {}), ...(original.patchFile ? { patchFile: original.patchFile } : {}),
+      tools: allowed, depth: 0, key, rootId: original.rootId,
       resumedFrom: original.id, resumeSession: sessionFile, runner: state.settings.runner });
     if (!result.ok) throw new Error(result.reason);
     return result.job;
@@ -412,13 +446,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     pi.registerTool({
       name: 'agent_delegate',
       label: 'Delegate a job',
-      description: 'Start a subagent on one separable piece of work. It derives its own acceptance '
-        + 'criteria, returns evidence, and ends. Explorer and reviewer are read-only; worker may inherit active write tools. Built-in file '
-        + 'tools are fenced to cwd. Bash is excluded unless PI_SUBAGENTS_ALLOW_BASH=1 and the child is writable; '
-        + 'when enabled it is unrestricted, not sandboxed. It runs beside you: do not wait for it, '
-        + `and do not delegate what you could finish in the time this costs. ${hint}`,
+      description: 'Start one separable job with either a package-owned factory agent or a base role. Factory implementers and documenters '
+        + 'write only in external snapshots under ~/.prjct/subagents; documentation requires an explicit user request. Factory agents never inherit Bash or third-party mutation tools. '
+        + 'Base explorer and reviewer roles are read-only. A legacy worker may inherit active write tools and opt-in unrestricted Bash. The job reports evidence and ends; do not wait for it. '
+        + `Factory agents:\n${factoryCatalogue()}\n${hint}`,
       parameters: Type.Object({
-        role: StringEnum(ROLES),
+        agent: Type.Optional(StringEnum(FACTORY_AGENTS)),
+        role: Type.Optional(StringEnum(ROLES)),
+        requestedByUser: Type.Optional(Type.Boolean({ description: 'True only when the user explicitly requested product documentation.' })),
         subject: Type.String({ minLength: 1, maxLength: 160 }),
         task: Type.String({ minLength: 1, maxLength: 24000 }),
         context: Type.Optional(Type.String({ maxLength: 24000 })),
@@ -428,35 +463,51 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       async execute(toolCallId: string, input: any) {
         const jobs = state.jobs;
         if (!jobs) throw new Error('This session is not ready to delegate yet.');
+        const choice = resolveProfile(input.agent, input.role);
+        if (choice.profile?.explicitOnly && input.requestedByUser !== true) throw new Error(`${choice.profile.name} runs only after an explicit user request.`);
+        if (choice.profile?.name === 'product-documenter' && state.settings.artifactPolicy === 'none') throw new Error('Product documentation artifacts are disabled by artifactPolicy.');
         const model = resolve(input.model);
         if ('refused' in model) throw new Error(model.refused);
         const dir = resolveWorkDir(ctx().cwd, input.cwd);
         if ('refused' in dir) throw new Error(dir.refused);
+        const topics = choice.profile?.name === 'specification-architect' ? await selectSpecificationTopics(ctx()) : [];
+        if (topics === undefined) throw new Error('Specification clarification was cancelled.');
+        const clarification = choice.profile?.name === 'specification-architect'
+          ? `Operator clarification focus: ${topics.length ? topics.join(', ') : 'no additional topics selected'}. Ask concise follow-up questions only where consequential uncertainty remains.` : '';
+        const delegatedContext = [input.context, clarification].filter(Boolean).join('\n\n');
+        if (Buffer.byteLength(input.task, 'utf8') + Buffer.byteLength(delegatedContext, 'utf8') > state.settings.limits.taskBytes) throw new Error('Task and clarification context exceed the configured delegation limit.');
+        const workspace = await externalWorkspace(choice.profile, dir.cwd);
         // A job born inside a team thread is filed under it when a host that
         // knows about teams registered a provider; without one it stands alone.
         const rootId = activeRoot();
         const decision = await jobs.delegate({
-          role: input.role, subject: input.subject, task: input.task, context: input.context,
-          ...model, cwd: dir.cwd, depth: 0, tools: inheritedTools(input.role), runner: state.settings.runner,
+          role: choice.role, ...(choice.profile ? { agent: choice.profile.name } : {}),
+          subject: input.subject, task: input.task, context: delegatedContext,
+          ...model, cwd: workspace?.cwd ?? dir.cwd, ...(workspace ? workspace : {}),
+          depth: 0, tools: factoryTools(choice.profile, choice.role), runner: state.settings.runner,
           // The same call twice admits one job, not a second identical child.
           key: toolCallId,
           ...(rootId ? { rootId } : {}),
         });
-        if (!decision.ok) throw new Error(decision.reason);
+        if (!decision.ok || decision.repeated) {
+          if (workspace) await discardExternalWorkspace(workspace);
+          if (!decision.ok) throw new Error(decision.reason);
+        }
         startTicking();
         const job = decision.job;
         return {
           content: [{
             type: 'text' as const,
-            text: `${job.name} (${job.role}) is on "${job.subject}", using ${modelKey(job.provider, job.modelId)}, `
-              + `reading ${job.cwd}. Its report arrives here when it ends. Carry on; do not wait for it, and do not ask again for the same work.`,
+            text: `${job.name} (${job.agent ?? job.role}) is on "${job.subject}", using ${modelKey(job.provider, job.modelId)}, `
+              + `${job.workspace ? `working in external snapshot ${job.cwd}; proposed changes will be written to ${job.patchFile}` : `reading ${job.cwd}`}. `
+              + 'Its report arrives here when it ends. Carry on; do not wait for it, and do not ask again for the same work.',
           }],
           details: job,
         };
       },
       renderCall(args: any, theme: any) {
         const text = theme.fg('toolTitle', theme.bold('▸ delegate'))
-          + ` ${theme.fg('muted', String(args?.role ?? ''))} ${plain(String(args?.subject ?? ''))}`;
+          + ` ${theme.fg('muted', String(args?.agent ?? args?.role ?? ''))} ${plain(String(args?.subject ?? ''))}`;
         return new Text(text, 0, 0);
       },
       renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return jobView(result?.details, expanded, theme); },
@@ -482,7 +533,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       if (['result', 'steer', 'resume'].includes(input.action)) {
         const job = input.jobId ? find(jobs.ledger(), input.jobId) : undefined;
         if (!job) throw new Error('Give the id of a job this session started.');
-        if (input.action === 'result') return { content: [{ type: 'text' as const, text: JSON.stringify(job.report ?? { state: job.state, reason: job.reason }) }], details: job };
+        if (input.action === 'result') return { content: [{ type: 'text' as const, text: JSON.stringify({
+          ...(job.report ?? { state: job.state, reason: job.reason }),
+          ...(job.patchFile ? { externalWorkspace: job.workspace, patchFile: job.patchFile } : {}),
+        }) }], details: job };
         if (typeof input.message !== 'string') throw new Error('A message is required.');
         if (input.action === 'resume') {
           const resumed = await resumeJob(job.id, input.message, _toolCallId);
@@ -582,7 +636,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     for (const entry of context.sessionManager.getBranch() as any[]) {
       if (entry.type === 'custom' && entry.customType === 'agent-job' && entry.data?.id) recorded.add(entry.data.id);
     }
-    if (!options.makeRunner) void cleanupStorage(storageRoot(), state.settings.retentionDays).catch(() => undefined);
+    if (!options.makeRunner) {
+      void cleanupStorage(storageRoot(), state.settings.retentionDays).catch(() => undefined);
+      void cleanupExternalWorkspaces(undefined, state.settings.workspaceRetentionHours).catch(() => undefined);
+    }
     // The toggle survives a reload as a session entry, like the ledger does.
     const pref = context.sessionManager.getBranch()
       .filter((entry: any) => entry.type === 'custom' && entry.customType === 'agents-auto').at(-1) as any;

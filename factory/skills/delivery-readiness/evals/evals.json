@@ -1,0 +1,25 @@
+{
+  "skill_name": "delivery-readiness",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Assess delivery readiness for a backward-compatible API release that includes a large online database backfill and a feature flag. Do not deploy.",
+      "expected_output": "The assessment covers migration safety, rollout sequence, signals, blast radius, rollback limitations, and blockers using existing evidence.",
+      "files": [],
+      "expectations": [
+        "The assessment covers migration safety, rollout sequence, signals, blast radius, rollback limitations, and blockers using existing evidence.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Assess a CSS-only spacing fix with passing visual tests and no configuration or data changes.",
+      "expected_output": "The response stays lightweight, confirms relevant evidence, and does not invent migration, SRE, or release-document requirements.",
+      "files": [],
+      "expectations": [
+        "The response stays lightweight, confirms relevant evidence, and does not invent migration, SRE, or release-document requirements.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

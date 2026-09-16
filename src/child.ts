@@ -74,8 +74,8 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
     pi.registerTool({
       name: DELEGATE_TOOL,
       label: 'Delegate',
-      description: 'Ask for a second reader on a part of this task that can be worked out on its '
-        + 'own. It runs beside you and reports to the session that asked for your work, not to you, '
+      description: 'Ask for a second agent on a separable part of this task, choosing either a base role or a package-owned factory agent. '
+        + 'It runs beside you and reports to the session that asked for your work, not to you, '
         + 'so do not wait for it and do not plan around its answer. Delegate only what is genuinely '
         + 'separable; splitting work you could finish yourself costs more than it saves.',
       parameters: DelegateSchema,

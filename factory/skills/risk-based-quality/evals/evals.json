@@ -1,0 +1,25 @@
+{
+  "skill_name": "risk-based-quality",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Review a change that moves authorization checks from a route handler into shared middleware used by every tenant. Prioritize verification by risk.",
+      "expected_output": "The review emphasizes authorization boundaries, tenant isolation, regressions, failure modes, and concrete evidence rather than generic style or a QA document.",
+      "files": [],
+      "expectations": [
+        "The review emphasizes authorization boundaries, tenant isolation, regressions, failure modes, and concrete evidence rather than generic style or a QA document.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Review a one-word correction in a tooltip where snapshots already cover the screen.",
+      "expected_output": "The review remains proportionate, verifies the targeted behavior, and avoids security/performance ceremony and new documentation.",
+      "files": [],
+      "expectations": [
+        "The review remains proportionate, verifies the targeted behavior, and avoids security/performance ceremony and new documentation.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

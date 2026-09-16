@@ -1,0 +1,25 @@
+{
+  "skill_name": "lean-design-sprint",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run a lean design sprint for a returns workflow used by warehouse operators wearing gloves. We have five days and can interview three operators.",
+      "expected_output": "One compact sprint plan frames the outcome, maps the critical journey, compares options, defines a believable prototype test, and ends in a go/change/stop decision.",
+      "files": [],
+      "expectations": [
+        "One compact sprint plan frames the outcome, maps the critical journey, compares options, defines a believable prototype test, and ends in a go/change/stop decision.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "A team wants a new internal deployment dashboard but cannot agree whether the core problem is visibility or control. Keep the sprint lightweight.",
+      "expected_output": "The sprint tests the riskiest problem hypothesis before production work and consolidates findings in one lean brief.",
+      "files": [],
+      "expectations": [
+        "The sprint tests the riskiest problem hypothesis before production work and consolidates findings in one lean brief.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "skill_name": "lean-sdd-bdd",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Specify multi-tenant webhook delivery with retries, signing, replay protection, tenant isolation, and gradual rollout. Avoid separate requirements, architecture, and test-plan documents.",
+      "expected_output": "One lean specification separates design decisions from observable acceptance examples, covers security/reliability and rollout, and names open questions without duplication.",
+      "files": [],
+      "expectations": [
+        "One lean specification separates design decisions from observable acceptance examples, covers security/reliability and rollout, and names open questions without duplication.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Create the design and acceptance behavior for password-reset links that expire, are single-use, and invalidate after a password change.",
+      "expected_output": "The result provides bounded SDD decisions and precise BDD examples including edge cases without restating each scenario as prose requirements.",
+      "files": [],
+      "expectations": [
+        "The result provides bounded SDD decisions and precise BDD examples including edge cases without restating each scenario as prose requirements.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
   "name": "@prjct.app/pi-subagents",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Delegate separable work to autonomous subagents that run beside a PI Agent session and report back with evidence.",
   "type": "module",
   "keywords": [

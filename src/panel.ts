@@ -175,7 +175,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     }
     const status = statusOf(job);
     const detailFocus = state.focus === 'detail' ? accent(theme.bold('›')) : ' ';
-    const identity = `${detailFocus} ${theme.fg(status.color, status.icon)} ${accent(theme.bold(job.name))} ${dim(`· ${job.role} · ${status.label} · ${seconds(job)}${spent(job)}`)}`;
+    const identity = `${detailFocus} ${theme.fg(status.color, status.icon)} ${accent(theme.bold(job.name))} ${dim(`· ${job.agent ?? job.role} · ${status.label} · ${seconds(job)}${spent(job)}`)}`;
     const title = dim(plain(job.subject));
     if (state.composing) {
       state.pageHeight = 0;
@@ -186,7 +186,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const tabs = ['Activity', 'Result', 'Details'].map((tab, index) => index === state.tab ? accent(theme.bold(`[${index + 1} ${tab}]`)) : dim(`${index + 1} ${tab}`)).join('  ');
     const header = [identity, title, tabs];
     const content = state.tab === 0 ? activityLines(job, width) : state.tab === 1 ? report(job, width) : [
-      accent('TASK'), ...paragraphs(job.task, width), '', accent('EXECUTION'), ...paragraphs(`ID: ${job.id}\nDirectory: ${job.cwd}\nModel: ${job.provider}/${job.modelId}\nRunner: ${job.runner ?? 'process'}\nTools: ${(job.tools ?? []).join(', ')}\nSession: ${job.sessionFile ?? 'not created yet'}${job.resumedFrom ? `\nContinues: ${job.resumedFrom}` : ''}`, width),
+      accent('TASK'), ...paragraphs(job.task, width), '', accent('EXECUTION'), ...paragraphs(`ID: ${job.id}\nDirectory: ${job.cwd}${job.sourceCwd ? `\nSource: ${job.sourceCwd}` : ''}${job.patchFile ? `\nPatch: ${job.patchFile}` : ''}\nModel: ${job.provider}/${job.modelId}\nRunner: ${job.runner ?? 'process'}\nTools: ${(job.tools ?? []).join(', ')}\nSession: ${job.sessionFile ?? 'not created yet'}${job.resumedFrom ? `\nContinues: ${job.resumedFrom}` : ''}`, width),
       ...(source.limits ? ['', accent('LIMITS'), ...paragraphs(`${source.ledger()?.jobs.length ?? 0}/${source.limits().jobs} runs · ${source.limits().concurrency} concurrent\n${source.limits().timeoutMs / 1000}s per tree · depth ${source.limits().depth} · ${source.limits().descendants} descendants`, width)] : [])];
     const wrapped = content.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width)));
     const room = Math.max(1, height - header.length);

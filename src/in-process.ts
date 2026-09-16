@@ -3,6 +3,7 @@ import { installGuard } from './child.ts';
 import { agentHome, roleTools } from './config.ts';
 import { activityOf } from './activity.ts';
 import { childPrompt, neutralCatalogue } from './context.ts';
+import { factoryAgent } from './factory.ts';
 import { within, type Runner, type RunnerEvent, type spawnRunner } from './runner.ts';
 import { read as readWire } from './wire.ts';
 import { ASK_TOOL, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk, type DelegateAnswer } from './schema.ts';
@@ -132,7 +133,8 @@ export function inProcessRunner(options: Options): Runner {
         }, options.wireMs ?? 2_000);
         slot.timer.unref?.();
       }
-      void session.prompt(childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired })).catch(error => terminal({ type: 'failed', reason: String(error).slice(0, 500) }));
+      void session.prompt(childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired,
+        ...(job.agent ? { profile: factoryAgent(job.agent).instructions } : {}) })).catch(error => terminal({ type: 'failed', reason: String(error).slice(0, 500) }));
     } catch (error) {
       terminal({ type: 'failed', reason: String(error).slice(0, 500) });
       await stop();

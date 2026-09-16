@@ -148,6 +148,8 @@ export function childPrompt(input: {
   subject: string;
   task: string;
   context?: string;
+  /** Package-owned profile and playbooks embedded by the factory. */
+  profile?: string;
   /** When false or omitted, the delegate tool does not exist in this process. */
   canDelegate?: boolean;
   /** The pi tools this child was given. Omitted means the read-only set. */
@@ -156,6 +158,7 @@ export function childPrompt(input: {
   wired?: boolean;
 }): string {
   const context = input.context?.trim();
+  const profile = input.profile?.trim();
   const inherited = input.tools ?? READ_ONLY_TOOLS;
   /** File mutation and an unrestricted shell are separate capabilities. */
   const writer = inherited.includes('edit') || inherited.includes('write');
@@ -179,10 +182,11 @@ export function childPrompt(input: {
     `You are ${input.name}, working alone in a session that exists for one task and ends with it.`,
     '',
     roleBrief(input.role),
+    ...(profile ? ['', profile] : []),
     '',
     '## Tools you have',
-    'This process loaded no extensions, no skills, and no prompt templates. A skill or extension '
-    + 'from the session that asked is not here. Call only a tool from this list; anything else is not installed.',
+    'This process loaded no ambient extensions, skills, or prompt templates. Only the package-owned profile and playbooks '
+    + 'embedded above apply. Call only a tool from this list; anything else is not installed.',
     '',
     ...tools.map(line => `- ${line}`),
     '',

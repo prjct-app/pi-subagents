@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installJobs } from '../src/index.ts';
@@ -13,7 +17,7 @@ const good = (over: Partial<Report> = {}): Report => ({
 });
 
 /** The host, as much of it as this extension touches. */
-function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string> } = {}) {
+function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; cwd?: string; workspaceRoot?: string } = {}) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const renderers = new Map<string, any>();
@@ -41,7 +45,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   const notices: string[] = [];
   const widgets: Array<string[] | undefined> = [];
   const ctx: any = {
-    cwd: '/work',
+    cwd: options.cwd ?? '/work',
     hasUI: true,
     model: available.at(-1),
     modelRegistry: { getAvailable: () => available },
@@ -67,7 +71,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   }) as any;
   const made: any[] = [];
 
-  installJobs(pi, { makeRunner, tickMs: 50, ...(options.complete ? { complete: options.complete } : {}) });
+  installJobs(pi, { makeRunner, tickMs: 50, ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
 
   const emit = async (name: string, event: unknown = {}) => {
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
@@ -109,6 +113,40 @@ test('the editor widget exists only while a subagent is running', async () => {
   h.of(job).emit({ type: 'settled', report: good({ outcome: 'blocked', blockers: ['Needs a decision.'] }) });
   await settleTick();
   assert.equal(h.widgets.at(-1), undefined, 'historical attention must not keep the widget above the editor');
+});
+
+test('factory agents resolve safe roles and explicit documentation consent', async t => {
+  const h = host(); await h.emit('session_start', { reason: 'resume' });
+  const discovery = (await h.tools.get('agent_delegate').execute('factory-discovery', {
+    agent: 'product-discovery', subject: 'Validate the problem', task: 'Research the user need.',
+  })).details as Job;
+  assert.equal(discovery.agent, 'product-discovery');
+  assert.equal(discovery.role, 'explorer');
+  assert.deepEqual(discovery.tools, ['read', 'grep', 'find', 'ls']);
+  await assert.rejects(() => h.tools.get('agent_delegate').execute('factory-docs', {
+    agent: 'product-documenter', subject: 'Write docs', task: 'Create a user guide.',
+  }), /explicit user request/);
+  await h.emit('session_shutdown');
+});
+
+test('factory implementers write only inside an external Git snapshot', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'subagents-factory-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, 'client'); await mkdir(source);
+  await writeFile(join(source, 'app.txt'), 'client\n');
+  execFileSync('git', ['init', '--quiet'], { cwd: source });
+  execFileSync('git', ['add', '--all'], { cwd: source });
+  execFileSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '--quiet', '-m', 'base'], { cwd: source });
+  const h = host({ cwd: source, workspaceRoot: join(root, '.prjct', 'workspaces') }); await h.emit('session_start', { reason: 'resume' });
+  const delegated = (await h.tools.get('agent_delegate').execute('factory-implementation', {
+    agent: 'implementer', subject: 'Change the app', task: 'Change app.txt safely.',
+  })).details as Job;
+  assert.equal(delegated.agent, 'implementer'); assert.equal(delegated.role, 'worker');
+  assert.ok(delegated.tools?.includes('edit')); assert.ok(!delegated.tools?.includes('bash'));
+  assert.equal(delegated.sourceCwd, await realpath(source)); assert.notEqual(delegated.cwd, source);
+  assert.match(delegated.cwd, /\.prjct.*workspaces/);
+  await writeFile(join(delegated.cwd, 'app.txt'), 'snapshot\n');
+  assert.equal(await readFile(join(source, 'app.txt'), 'utf8'), 'client\n');
+  await h.emit('session_shutdown');
 });
 
 test('bash is inherited only after the operator opts a writable child in', async (t) => {

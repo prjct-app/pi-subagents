@@ -45,7 +45,7 @@ export const spent = (job: Job): string =>
 
 /** One job, one line: who, what, how it is going. */
 export const jobLine = (job: Job): string =>
-  `${one(job.name, 24)} · ${job.role} · ${job.state} · ${one(job.subject, 60)} · ${seconds(job)}${spent(job)}`;
+  `${one(job.name, 24)} · ${job.agent ?? job.role} · ${job.state} · ${one(job.subject, 60)} · ${seconds(job)}${spent(job)}`;
 
 /**
  * The whole ledger, nested under the job that asked for each piece.
@@ -95,7 +95,7 @@ export function collapsed(heading: string) {
 
 /** One job, one line, in the session's own colors. */
 export function themedJobLine(job: Job, theme: Theme): string {
-  return `${theme.bold(plain(job.name))} ${theme.fg('muted', job.role)} ${theme.fg(statusOf(job).color, statusOf(job).label)} `
+  return `${theme.bold(plain(job.name))} ${theme.fg('muted', job.agent ?? job.role)} ${theme.fg(statusOf(job).color, statusOf(job).label)} `
     + `${plain(job.subject)} ${theme.fg('dim', `${seconds(job)}${spent(job)}`)}`;
 }
 
@@ -103,7 +103,7 @@ export function jobView(job: Job | undefined, expanded: boolean, theme?: Theme) 
   if (!job || typeof job.subject !== 'string') return new Text('Job unavailable', 0, 0);
   const heading = theme ? `▸ ${themedJobLine(job, theme)}` : `▸ ${jobLine(job)}`;
   if (!expanded) return collapsed(heading);
-  return new Text([heading, ...reportLines(job)].join('\n'), 1, 0);
+  return new Text([heading, ...reportLines(job), ...(job.patchFile ? [`External patch: ${plain(job.patchFile)}`] : [])].join('\n'), 1, 0);
 }
 
 export function ledgerView(ledger: Ledger | undefined, expanded: boolean, theme?: Theme) {
@@ -133,8 +133,9 @@ export function resultContent(jobs: readonly Job[]): string {
   return [
     `${jobs.length} job${jobs.length === 1 ? '' : 's'} finished (evidence, not a verdict).`,
     ...shown.flatMap(job => [
-      `${one(job.name, 24)} (${job.role}) · ${one(job.subject, 60)} · ${job.state}`,
+      `${one(job.name, 24)} (${job.agent ?? job.role}) · ${one(job.subject, 60)} · ${job.state}`,
       ...reportLines(job),
+      ...(job.patchFile ? [`External patch: ${one(job.patchFile, 300)}`] : []),
     ]),
     ...(rest > 0 ? [`${rest} more; agent_jobs status.`] : []),
     ...(blocked.length > 0 ? ['Blocked jobs are unresolved. Do not call this task done while they are open.'] : []),

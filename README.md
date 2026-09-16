@@ -48,9 +48,31 @@ In the message editor, `Enter` inserts a newline; `Ctrl+Enter` or `Ctrl+S` sends
 The limit is 4,000 characters. Oversized pastes are rejected with a visible notice,
 not silently shortened. Standard Pi themes and Unicode editing are preserved.
 
+## Lean software factory
+
+`agent_delegate` can select one package-owned factory profile instead of a base role:
+
+- `product-discovery` — evidence-led research and lean design sprints.
+- `specification-architect` — one non-duplicative SDD/BDD specification.
+- `bug-triager` — reproduction, severity, regression boundary and likely cause.
+- `implementer` — technology-agnostic changes in an external Git snapshot.
+- `quality-reviewer` — risk-based product and engineering verification.
+- `delivery-engineer` — rollout, rollback, migration and operational readiness.
+- `product-documenter` — customer-facing documentation, only after an explicit user request.
+
+The specification profile opens a keyboard checklist where one or many clarification
+topics can be selected before work starts. Product documentation is never inferred
+from an implementation or release. It is proposed as an external patch and cannot
+write into the client checkout automatically.
+
+Factory implementers and documenters receive only fenced file tools in a private
+snapshot under `~/.prjct/subagents/workspaces/`; they never receive Bash or arbitrary
+mutation extensions. The snapshot includes tracked changes and non-ignored untracked
+files. The resulting `changes.patch` must be reviewed and applied separately.
+
 ## Three tools
 
-- **`agent_delegate`**: `role`, `subject`, `task`, optional `context`, `model`, `cwd`.
+- **`agent_delegate`**: choose either `agent` or `role`, plus `subject`, `task`, and optional `context`, `model`, `cwd`. `requestedByUser: true` is required for `product-documenter`.
 - **`agent_jobs`**: `action: status | result | cancel | steer | resume`, optional
   `jobId` and `message` (required for steer/resume). `result` returns the full report.
 - **`agent_reply`**: `name`, `answer`; answer a question escalated by a live child.
@@ -94,6 +116,8 @@ the parent session starts again.
 {
   "runner": "process",
   "retentionDays": 7,
+  "workspaceRetentionHours": 24,
+  "artifactPolicy": "requested",
   "extensionPackages": [],
   "limits": {
     "concurrency": 2,
@@ -110,7 +134,9 @@ the parent session starts again.
 completed jobs do not refund it. Concurrency is a separate live capacity limit.
 The clock covers the entire tree from admission, including queued time.
 Supported maxima are 16 concurrent jobs, 256 session runs, depth 8, 64 descendants,
-24 hours per tree and 48 KiB of task plus context. Retention accepts 1–365 days.
+24 hours per tree and 48 KiB of task plus context. Session retention accepts 1–365 days;
+external workspace retention accepts 1–720 hours. `artifactPolicy` is `requested` by
+default or `none` to disable product-documentation artifacts.
 
 `extensionPackages` names already-installed npm packages with explicit
 `pi.extensions` entries. Packages are resolved from the project and Pi agent/npm
@@ -129,15 +155,18 @@ Environment variables remain supported:
   off; toggle per session with `/agents auto on|off`. Automatic roles remain readers.
 - `PI_SUBAGENTS_ALLOW_BASH=1`: enable unrestricted Bash for writable workers.
 - `PI_SUBAGENTS_PI_COMMAND`: override child Pi invocation for the process runner.
-- `PI_CODING_AGENT_DIR`: Pi agent home, also used for configuration and storage.
+- `PI_CODING_AGENT_DIR`: Pi agent home, used for configuration and model credentials.
+- `PRJCT_HOME`: package-owned data root; defaults to `~/.prjct`.
 
 ## History and recovery
 
 New child sessions and coordination files live under
-`<Pi agent directory>/prjct-subagents/`, partitioned by parent session. The default
-retention is seven days from completion. Startup cleanup removes expired owned
-jobs, skips live owners and symlink directories, and never deletes legacy external
-session files. Parent reports remain in the parent session.
+`~/.prjct/subagents/state/`, partitioned by parent session. Isolated implementation
+and documentation snapshots live under `~/.prjct/subagents/workspaces/`. The default
+retention is seven days for sessions and 24 hours for settled workspaces. Startup
+cleanup removes only expired package-owned data, skips live owners and symlink
+directories, and never deletes legacy external session files. Parent reports remain
+in the parent Pi session.
 
 Resume explicitly forks the retained conversation into a new execution with a new
 ID, a new clock and the intersection of the previous and current permissions. Only

@@ -1,0 +1,25 @@
+{
+  "skill_name": "product-documentation",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "The user explicitly requested an onboarding guide for a CLI used by first-time developers. Existing README content is incomplete and the commands must be verified.",
+      "expected_output": "The proposal identifies audience and task, updates the existing source of truth, verifies examples, covers expected outcomes and recovery, and leaves an external patch.",
+      "files": [],
+      "expectations": [
+        "The proposal identifies audience and task, updates the existing source of truth, verifies examples, covers expected outcomes and recovery, and leaves an external patch.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Implementation of an internal retry refactor has finished, but nobody requested documentation. Decide what documentation to create.",
+      "expected_output": "The agent creates nothing, explains that internal completion is not documentation authorization, and reports any genuinely user-facing gap for confirmation.",
+      "files": [],
+      "expectations": [
+        "The agent creates nothing, explains that internal completion is not documentation authorization, and reports any genuinely user-facing gap for confirmation.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

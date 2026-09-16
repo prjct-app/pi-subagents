@@ -41,6 +41,7 @@ export type Request = {
   resumeSession?: string;
   runner?: 'process' | 'in-process';
   role: string;
+  agent?: string;
   subject: string;
   task: string;
   context?: string;
@@ -48,6 +49,9 @@ export type Request = {
   provider: string;
   modelId: string;
   cwd: string;
+  sourceCwd?: string;
+  workspace?: string;
+  patchFile?: string;
   /** The pi tools the child inherits. Omitted is read-only, as it always was. */
   tools?: readonly string[];
   rootId?: string;
@@ -158,6 +162,7 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
     ...(request.resumedFrom ? { resumedFrom: request.resumedFrom, resumeSession: request.resumeSession } : {}),
     ...(request.runner ? { runner: request.runner } : {}),
     role: request.role as Role,
+    ...(request.agent ? { agent: request.agent } : {}),
     name: distinctName(id, live(ledger).map(other => other.name)),
     subject: request.subject.trim(),
     task: request.task,
@@ -165,6 +170,9 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
     provider: request.provider,
     modelId: request.modelId,
     cwd: request.cwd,
+    ...(request.sourceCwd ? { sourceCwd: request.sourceCwd } : {}),
+    ...(request.workspace ? { workspace: request.workspace } : {}),
+    ...(request.patchFile ? { patchFile: request.patchFile } : {}),
     ...(request.tools ? { tools: [...request.tools] } : {}),
     state: 'queued',
     depth: request.depth,

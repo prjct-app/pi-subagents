@@ -218,6 +218,15 @@ test('the task travels as a prompt, and it is running only once that is taken', 
   assert.ok(child.sent.indexOf(prompt) > 0, 'the model is chosen before the work starts, never during it');
 });
 
+test('factory profiles inject only their assigned package-owned playbooks', async () => {
+  const { child } = await started({ role: 'explorer', agent: 'bug-triager' }, live);
+  const prompt = child.sent.find((message: any) => message.type === 'prompt')?.message ?? '';
+  assert.match(prompt, /Factory profile: bug-triager/);
+  assert.match(prompt, /Bug Triage and Debugging/);
+  assert.match(prompt, /Risk-Based Quality/);
+  assert.doesNotMatch(prompt, /Product Documentation/);
+});
+
 test('a child that will not take the task fails instead of sitting there', async () => {
   const { child, ended } = await started({}, c => {
     c.refuses = 'Agent is streaming';

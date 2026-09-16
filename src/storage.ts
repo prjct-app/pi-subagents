@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
-import { agentHome } from './config.ts';
+import { prjctHome } from './config.ts';
 import { isTerminal, type Job } from './schema.ts';
 
-export const storageRoot = (home = agentHome()): string => join(home, 'prjct-subagents');
+export const storageRoot = (home = prjctHome()): string => join(home, 'subagents', 'state');
+export const workspaceRoot = (home = prjctHome()): string => join(home, 'subagents', 'workspaces');
+export const artifactRoot = (home = prjctHome()): string => join(home, 'subagents', 'artifacts');
 const owner = 'prjct-subagents-v2';
 export const sessionRoot = (session: string, root = storageRoot()): string => join(root, createHash('sha256').update(session).digest('hex').slice(0, 24));
 

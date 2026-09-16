@@ -90,14 +90,16 @@ export const QuestionAskSchema = Type.Object({
 });
 
 export const DelegateSchema = Type.Object({
-  role: StringEnum(ROLES),
+  role: Type.Optional(StringEnum(ROLES)),
+  agent: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   subject: Type.String({ minLength: 1, maxLength: 160 }),
   task: Type.String({ minLength: 1, maxLength: 24000 }),
   context: Type.Optional(Type.String({ maxLength: 24000 })),
   model: Type.Optional(Type.String({ maxLength: 256 })),
 });
 export type DelegateAsk = {
-  role: Role;
+  role?: Role;
+  agent?: string;
   subject: string;
   task: string;
   context?: string;
@@ -117,7 +119,8 @@ export type ModelAsk = { kind: 'use_model'; provider: string; modelId: string };
 /** A child asking for a child, on the wire: the ask plus its kind. */
 export const DelegateEnvelopeSchema = Type.Object({
   kind: Type.Literal('delegate'),
-  role: StringEnum(ROLES),
+  role: Type.Optional(StringEnum(ROLES)),
+  agent: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   subject: Type.String({ minLength: 1, maxLength: 160 }),
   task: Type.String({ minLength: 1, maxLength: 24000 }),
   context: Type.Optional(Type.String({ maxLength: 24000 })),
@@ -189,6 +192,8 @@ export type Job = {
   question?: string;
   id: string;
   role: Role;
+  /** Optional package-owned operating profile and its assigned playbooks. */
+  agent?: string;
   /** An invented person name, stable for the life of the job. */
   name: string;
   subject: string;
@@ -198,6 +203,10 @@ export type Job = {
   provider: string;
   modelId: string;
   cwd: string;
+  /** Original client directory when cwd is an external package-owned snapshot. */
+  sourceCwd?: string;
+  workspace?: string;
+  patchFile?: string;
   /**
    * The pi tools this child may call, inherited from the parent's active set
    * at admission. Absent means the original promise: read-only.
@@ -241,6 +250,7 @@ export const JobSchema = Type.Object({
   // stay read-only, which is what they were promised.
   id,
   role: enumOf(...ROLES),
+  agent: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   name: Type.String({ minLength: 1, maxLength: 48 }),
   subject: Type.String({ minLength: 1, maxLength: 160 }),
   task: Type.String({ minLength: 1, maxLength: 24000 }),
@@ -248,6 +258,9 @@ export const JobSchema = Type.Object({
   provider: Type.String({ minLength: 1, maxLength: 128 }),
   modelId: Type.String({ minLength: 1, maxLength: 128 }),
   cwd: Type.String({ minLength: 1, maxLength: 4096 }),
+  sourceCwd: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+  workspace: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+  patchFile: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
   tools: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 32 })),
   state: enumOf(...JOB_STATES),
   rootId: Type.Optional(id),

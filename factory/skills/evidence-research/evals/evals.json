@@ -1,0 +1,25 @@
+{
+  "skill_name": "evidence-research",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Research whether a payroll product for small Canadian construction firms should support offline time capture. Separate evidence from assumptions and tell us what decision can be made.",
+      "expected_output": "A concise evidence synthesis identifies the decision, primary evidence needed, contrary signals, confidence, and remaining assumptions without a standalone report file.",
+      "files": [],
+      "expectations": [
+        "A concise evidence synthesis identifies the decision, primary evidence needed, contrary signals, confidence, and remaining assumptions without a standalone report file.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "We assume enterprise users need CSV export because two sales calls mentioned it. Assess what evidence is missing before prioritizing the feature.",
+      "expected_output": "The response challenges the assumption, proposes the smallest discriminating research, and stops before speculative implementation.",
+      "files": [],
+      "expectations": [
+        "The response challenges the assumption, proposes the smallest discriminating research, and stops before speculative implementation.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

@@ -64,7 +64,7 @@ test('a child is told its task and what it was handed, and nothing else', () => 
   assert.match(prompt, new RegExp(`Calling ${REPORT_TOOL} ends this session`));
   assert.match(prompt, /not a verdict/, 'a child returns evidence; the parent judges');
   assert.match(prompt, /report it as a blocker/, 'and it never waits for anyone');
-  assert.match(prompt, /no extensions, no skills/);
+  assert.match(prompt, /no ambient extensions, skills/);
   assert.match(prompt, /^- read —/m);
   assert.match(prompt, /^- grep —/m);
   assert.match(prompt, /^- find —/m);

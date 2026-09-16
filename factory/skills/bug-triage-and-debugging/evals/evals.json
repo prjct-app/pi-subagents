@@ -1,0 +1,25 @@
+{
+  "skill_name": "bug-triage-and-debugging",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Customers report occasional duplicate card charges after mobile-network retries. Triage severity, produce a minimal reproduction strategy, and narrow likely boundaries without fixing code.",
+      "expected_output": "The triage distinguishes evidence from hypotheses, treats integrity as high impact, investigates idempotency and retry boundaries, and defines a regression target.",
+      "files": [],
+      "expectations": [
+        "The triage distinguishes evidence from hypotheses, treats integrity as high impact, investigates idempotency and retry boundaries, and defines a regression target.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "A command works locally but fails in CI with “file not found.” Determine whether this is a product defect, configuration issue, or environment mismatch.",
+      "expected_output": "The response compares environments, creates a minimal reproduction, classifies the issue based on evidence, and does not jump to a code fix.",
+      "files": [],
+      "expectations": [
+        "The response compares environments, creates a minimal reproduction, classifies the issue based on evidence, and does not jump to a code fix.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

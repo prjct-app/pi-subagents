@@ -1,0 +1,25 @@
+{
+  "skill_name": "technology-agnostic-implementation",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Implement an accepted pagination change in an unfamiliar repository. Discover its language, framework, conventions, and validation commands before editing. Work in the provided external snapshot.",
+      "expected_output": "The implementation follows repository evidence, changes only the snapshot, makes the smallest complete change, adds proportionate tests, and reports unavailable executable checks.",
+      "files": [],
+      "expectations": [
+        "The implementation follows repository evidence, changes only the snapshot, makes the smallest complete change, adds proportionate tests, and reports unavailable executable checks.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Fix a parsing defect in a polyglot repository without assuming which service owns it. The acceptance example and triage evidence are supplied.",
+      "expected_output": "The agent locates the owning stack, follows local conventions, avoids unrelated refactors, and returns a patch-oriented evidence report.",
+      "files": [],
+      "expectations": [
+        "The agent locates the owning stack, follows local conventions, avoids unrelated refactors, and returns a patch-oriented evidence report.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

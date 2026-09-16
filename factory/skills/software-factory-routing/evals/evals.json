@@ -1,0 +1,25 @@
+{
+  "skill_name": "software-factory-routing",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "A founder wants to validate a new scheduling product for independent clinics. The users, workflow, and willingness to pay are uncertain. Route the work without creating a backlog or architecture prematurely.",
+      "expected_output": "A lean route starts with evidence research and a design sprint, defers specification and implementation, and identifies a stop/change/proceed decision.",
+      "files": [],
+      "expectations": [
+        "A lean route starts with evidence research and a design sprint, defers specification and implementation, and identifies a stop/change/proceed decision.",
+        "The response does not create or request redundant process documentation."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Change the misspelled label “Recieve” to “Receive” in an existing settings screen with established tests. Decide which factory stages are justified.",
+      "expected_output": "The route skips discovery and formal specification, uses a minimal implementation and targeted verification, and creates no documents.",
+      "files": [],
+      "expectations": [
+        "The route skips discovery and formal specification, uses a minimal implementation and targeted verification, and creates no documents.",
+        "The response does not create or request redundant process documentation."
+      ]
+    }
+  ]
+}

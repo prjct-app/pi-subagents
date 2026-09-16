@@ -62,7 +62,7 @@ test('every refusal says why, and nothing is quietly trimmed to fit', () => {
     ledger => accept(ledger).ledger, base);
   const over = admit(full, ask() as any, NOW);
   assert.equal(over.ok, false);
-  assert.match((over as any).reason, /accepted its 8 jobs/);
+  assert.match((over as any).reason, /accepted its 64 jobs/);
 });
 
 test('delegation stops at the configured depth, and says so', () => {
@@ -274,4 +274,11 @@ test('a root names its tree after itself, and a child inherits the wire', () => 
   assert.equal(first.job.wire, first.job.id);
   const second = accept(first.ledger, { parentJobId: first.job.id, depth: 1, wire: first.job.wire });
   assert.equal(second.job.wire, first.job.id, 'the whole tree talks on one file');
+});
+
+test('a retained session admits only one active continuation', () => {
+  const first = accept(emptyLedger('s1'), { resumedFrom: 'old', resumeSession: '/history/session.jsonl' });
+  const duplicate = admit(first.ledger, ask({ resumedFrom: 'old', resumeSession: '/history/session.jsonl' }) as any, NOW);
+  assert.equal(duplicate.ok, false);
+  assert.match((duplicate as any).reason, /active continuation/);
 });

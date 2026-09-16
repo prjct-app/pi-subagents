@@ -114,6 +114,7 @@ export function neutralCatalogue(choices: readonly ModelChoice[]): string {
 }
 
 const ROLE_BRIEF: Record<Role, string> = {
+  worker: 'You implement the assigned task within your effective tools and working directory. Validate changes, report evidence and unresolved decisions. Do not expand scope.',
   explorer: 'You are an explorer. You map what is there — where things live, how they connect, '
     + 'what is missing — and you report it plainly. You are not asked whether any of it is good.',
   reviewer: 'You are a reviewer. You read what is in front of you against criteria you derive '

@@ -30,7 +30,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     registerEntryRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
     registerMessageRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
     appendEntry: (customType: string, data: any) => { entries.push({ customType, data }); },
-    sendMessage: (message: any, given: any) => { sent.push({ message, options: given }); },
+    sendMessage: (message: any, given: any) => { sent.push({ message, options: given }); for (const handler of handlers.get('message_end') ?? []) handler({ message: { role: 'custom', ...message } }, ctx); },
     getActiveTools: () => ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
   } as unknown as ExtensionAPI;
 
@@ -48,7 +48,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     ui: { notify: (text: string) => { notices.push(text); }, setWidget: () => undefined },
     sessionManager: {
       getSessionId: () => 's1',
-      getBranch: () => entries.map(entry => ({ type: 'custom', customType: entry.customType, data: entry.data })),
+      getBranch: () => [...entries.map(entry => ({ type: 'custom', customType: entry.customType, data: entry.data })), ...sent.map(({ message }) => ({ type: 'custom_message', ...message }))],
     },
   };
 
@@ -105,19 +105,19 @@ test('bash is inherited only after the operator opts a writable child in', async
   delete process.env.PI_SUBAGENTS_ALLOW_BASH;
   const closed = host();
   await closed.emit('session_start', { reason: 'resume' });
-  const without = (await closed.delegate()).details as Job;
+  const without = (await closed.delegate({ role: 'worker' })).details as Job;
   assert.equal(without.tools?.includes('bash'), false);
 
   process.env.PI_SUBAGENTS_ALLOW_BASH = '1';
   const open = host();
   await open.emit('session_start', { reason: 'resume' });
-  const withBash = (await open.delegate()).details as Job;
+  const withBash = (await open.delegate({ role: 'worker' })).details as Job;
   assert.equal(withBash.tools?.includes('bash'), true);
 
   process.env.PI_SUBAGENTS_ALLOW_BASH = 'true';
   const almost = host();
   await almost.emit('session_start', { reason: 'resume' });
-  const notExact = (await almost.delegate()).details as Job;
+  const notExact = (await almost.delegate({ role: 'worker' })).details as Job;
   assert.equal(notExact.tools?.includes('bash'), false, 'only the documented exact value opts in');
 });
 
@@ -311,8 +311,8 @@ test('auto-delegation is off until a person turns it on, and then complex prompt
   assert.equal(h.runs.size, 2, 'the triage became jobs without the model calling any tool');
   const launched = [...h.runs.values()].map(run => run.job);
   assert.deepEqual(launched.map(job => job.subject).sort(), ['map the store', 'review the runner']);
-  assert.deepEqual(launched[0].tools, ['read', 'edit', 'write', 'grep', 'find', 'ls'],
-    'auto jobs inherit active file tools, but Bash needs its own consent');
+  assert.deepEqual(launched[0].tools, ['read', 'grep', 'find', 'ls'],
+    'auto readers never inherit mutations');
   const told = h.sent.find(item => item.message.customType === 'agents-auto');
   assert.ok(told, 'the session is told what was launched');
   assert.match(told.message.content, /auto-launch 2 expert subagents/);
@@ -392,4 +392,49 @@ test('a shutdown mid-triage admits no child into a session that is leaving', asy
   release('{"complex": true, "subtasks": [{"role": "explorer", "subject": "map it", "task": "Read src/."}]}');
   await settleTick(); await settleTick();
   assert.equal(h.runs.size, 0, 'no orphan: the closed flag stopped the admission');
+});
+
+test('failed completion delivery retries while idle without duplicate report entries', async () => {
+  const h = host(); await h.emit('session_start', { reason: 'resume' });
+  const originalSend = h.pi.sendMessage.bind(h.pi); const calls = { value: 0 };
+  h.pi.sendMessage = ((...args: Parameters<typeof h.pi.sendMessage>) => { if (++calls.value === 1) throw new Error('compacting'); return originalSend(...args); }) as typeof h.pi.sendMessage;
+  const job = (await h.delegate()).details as Job;
+  h.of(job).emit({ type: 'settled', report: good() }); await settleTick();
+  assert.equal(h.ledger().jobs[0].delivered, undefined);
+  await new Promise(resolve => setTimeout(resolve, 90));
+  assert.equal(h.sent.length, 1); assert.ok(h.ledger().jobs[0].delivered);
+  assert.equal(h.entries.filter(entry => entry.customType === 'agent-job').length, 1);
+  await h.emit('session_shutdown');
+});
+
+test('steering clears a pending question and result returns full evidence', async () => {
+  const h = host(); await h.emit('session_start', { reason: 'resume' });
+  const job = (await h.delegate()).details as Job;
+  await h.made[0].onAsk(job, 'Which API?'); assert.equal(h.ledger().jobs[0].question, 'Which API?');
+  await h.tools.get('agent_jobs').execute('steer', { action: 'steer', jobId: job.id, message: 'Use API v2' });
+  assert.equal(h.ledger().jobs[0].question, undefined); assert.equal(h.of(job).steers.at(-1), 'Use API v2');
+  h.of(job).emit({ type: 'settled', report: good() }); await settleTick();
+  const result = await h.tools.get('agent_jobs').execute('result', { action: 'result', jobId: job.id });
+  assert.deepEqual(result.details.report, good()); await h.emit('session_shutdown');
+});
+
+test('reader roles never inherit writable tools even from writable parents', async () => {
+  const h = host(); await h.emit('session_start', { reason: 'resume' });
+  const reader = (await h.delegate({ role: 'explorer' })).details;
+  const worker = (await h.delegate({ role: 'worker' })).details;
+  assert.deepEqual(reader.tools, ['read', 'grep', 'find', 'ls']); assert.ok(worker.tools.includes('write'));
+  await h.emit('session_shutdown');
+});
+
+test('fire-and-forget acceptance is not delivery; unobserved sends retry until a receipt arrives', async () => {
+  const h = host(); await h.emit('session_start', { reason: 'resume' });
+  const original = h.pi.sendMessage.bind(h.pi); const calls = { value: 0 };
+  h.pi.sendMessage = ((...args: Parameters<typeof h.pi.sendMessage>) => { if (++calls.value === 1) return; return original(...args); }) as typeof h.pi.sendMessage;
+  const job = (await h.delegate()).details as Job;
+  h.of(job).emit({ type: 'settled', report: good() }); await settleTick();
+  assert.equal(h.ledger().jobs[0].delivered, undefined, 'a void return is not an acknowledgement');
+  await new Promise(resolve => setTimeout(resolve, 130));
+  assert.equal(h.sent.length, 1); assert.ok(h.ledger().jobs[0].delivered);
+  assert.equal(h.entries.filter(entry => entry.customType === 'agent-job').length, 1);
+  await h.emit('session_shutdown');
 });

@@ -21,7 +21,7 @@ export const MET = ['yes', 'no', 'unknown'] as const;
 export type Met = (typeof MET)[number];
 
 /** The first release explores and reviews. Both are read-only. */
-export const ROLES = ['explorer', 'reviewer'] as const;
+export const ROLES = ['explorer', 'reviewer', 'worker'] as const;
 export type Role = (typeof ROLES)[number];
 
 /**
@@ -50,6 +50,7 @@ export const DELEGATE_TOOL = 'subagent_delegate';
  * an answer on stdin. The prefix is what tells the parent that the question
  * came from this package rather than from something asking for a person.
  */
+export const READY_PREFIX = 'pi-subagents-ready:';
 export const ASK_PREFIX = 'pi-subagents-ask:';
 
 /**
@@ -181,6 +182,11 @@ export type Report = {
 export type Usage = { tokens?: number; cost?: number; calls?: number };
 
 export type Job = {
+  continuedBy?: string;
+  resumedFrom?: string;
+  resumeSession?: string;
+  runner?: 'process' | 'in-process';
+  question?: string;
   id: string;
   role: Role;
   /** An invented person name, stable for the life of the job. */
@@ -225,6 +231,11 @@ export type Job = {
 type moment_ = number;
 
 export const JobSchema = Type.Object({
+  continuedBy: Type.Optional(id),
+  resumedFrom: Type.Optional(id),
+  resumeSession: Type.Optional(Type.String({ maxLength: 4096 })),
+  runner: Type.Optional(enumOf('process', 'in-process')),
+  question: Type.Optional(Type.String({ maxLength: 2000 })),
   // The pi tools this child may call, captured from the parent's active set at
   // admission. Absent on jobs admitted before the inheritance existed: those
   // stay read-only, which is what they were promised.
@@ -266,11 +277,11 @@ export const JobSchema = Type.Object({
  * nothing here carries a transcript or an RPC stream.
  */
 export const LedgerSchema = Type.Object({
-  v: Type.Literal(1),
+  v: Type.Union([Type.Literal(1), Type.Literal(2)]),
   session: id,
-  jobs: Type.Array(JobSchema, { maxItems: 64 }),
+  jobs: Type.Array(JobSchema, { maxItems: 256 }),
 });
-export type Ledger = { v: 1; session: string; jobs: Job[] };
+export type Ledger = { v: 1 | 2; session: string; jobs: Job[] };
 
 export const newJobId = (): string => `j_${randomUUID().replaceAll('-', '')}`;
 

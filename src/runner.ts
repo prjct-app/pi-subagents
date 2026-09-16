@@ -1,3 +1,4 @@
+import { activityOf, type ActivityInput } from './activity.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
@@ -5,7 +6,7 @@ import { childPrompt, neutralCatalogue, type ModelChoice } from './context.ts';
 import { read as readWire } from './wire.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
 import {
-  ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
+  READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk,
   type DelegateAnswer, type DelegateAsk, type Job, type ModelAsk, type Usage,
 } from './schema.ts';
@@ -20,6 +21,7 @@ import {
  */
 export type RunnerEvent =
   | { type: 'running' }
+  | { type: 'activity'; activity: ActivityInput }
   /**
    * The child stood behind a report: its own tool accepted it. Emitted as soon
    * as it lands so the job can be seen finishing, and still validated by the
@@ -81,7 +83,7 @@ const DIALOGS = ['select', 'confirm', 'input', 'editor'];
  * only when the child decides it does, and the deadline is cleared as soon as
  * it is moot rather than sitting in the loop until it fires.
  */
-async function within<T>(ms: number, work: Promise<T>, value: T): Promise<T> {
+export async function within<T>(ms: number, work: Promise<T>, value: T): Promise<T> {
   const deadline: { timer?: ReturnType<typeof setTimeout> } = {};
   try {
     return await Promise.race([
@@ -184,6 +186,9 @@ export function selectChildTools(active: readonly string[], allowBash: boolean):
 /** One `pi` child, spoken to over RPC. */
 export function spawnRunner(options: {
   guardPath: string;
+  extensionPaths?: string[];
+  verifyCapabilities?: boolean;
+  prepare?: (job: Job) => Promise<string>;
   /** How to launch the child. Injected so a test never reaches for a binary. */
   invoke?: (args: readonly string[]) => { command: string; args: string[] };
   /** Overridden only to widen what a child may call; never to add a writer. */
@@ -226,7 +231,12 @@ export function spawnRunner(options: {
       ...(mayDelegate ? [DELEGATE_TOOL] : []),
       ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : []),
     ])];
-    const launch = invoke(childArgs(options.guardPath, tools));
+    const sessionFile = options.prepare ? await options.prepare(job) : undefined;
+    const args = childArgs(options.guardPath, tools);
+    if (sessionFile) args.push('--session', sessionFile);
+    for (const path of options.extensionPaths ?? []) args.push('-e', path);
+    const launch = invoke(args);
+    if (sessionFile) emit({ type: 'session', file: sessionFile });
     const child: ChildProcess = start(launch.command, launch.args, {
       cwd: job.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -235,6 +245,8 @@ export function spawnRunner(options: {
       env: {
         ...process.env,
         PI_SUBAGENTS_CHILD: '1',
+        PI_SUBAGENTS_ROLE: job.role,
+        PI_SUBAGENTS_VERIFY_TOOLS: '1',
         PI_SUBAGENTS_DEPTH: String(depth),
         // The guard enforces the identical list from inside, where a tool that
         // arrived some other way is held to it too.
@@ -248,11 +260,16 @@ export function spawnRunner(options: {
       },
     });
 
+    const ready: { resolve?: (missing: string[]) => void } = {};
+    const capabilities = new Promise<string[]>(resolve => { ready.resolve = resolve; });
     const pending: Pending = new Map();
     const claimed = new Map<string, unknown>();
     /** Sibling-mail forwarding state, declared before any terminal path runs. */
     const forward = { offset: 0, spent: 0, timer: undefined as ReturnType<typeof setInterval> | undefined };
     const state = {
+      observed: undefined as Usage | undefined,
+      toolCalls: 0,
+      baseline: undefined as Usage | undefined,
       seq: 0, stderr: '',
       report: undefined as unknown,
       finishing: false, done: false,
@@ -376,6 +393,11 @@ export function spawnRunner(options: {
         ...(typeof data.cost === 'number' ? { cost: data.cost } : {}),
         ...(typeof data.toolCalls === 'number' ? { calls: data.toolCalls } : {}),
       };
+      if (state.baseline) {
+        for (const key of ['tokens', 'cost', 'calls'] as const) {
+          if (usage[key] !== undefined && state.baseline[key] !== undefined) usage[key] = Math.max(0, usage[key]! - state.baseline[key]!);
+        }
+      }
       return Object.keys(usage).length > 0 ? usage : undefined;
     };
 
@@ -387,7 +409,7 @@ export function spawnRunner(options: {
     const finish = async (): Promise<void> => {
       if (state.finishing || state.stopping) return;
       state.finishing = true;
-      const usage = await spent();
+      const usage = state.observed ? { ...state.observed, calls: state.toolCalls } : await spent();
       if (state.report === undefined) {
         terminal({ type: 'failed', reason: 'The child ended without reporting.', ...(usage ? { usage } : {}) });
         return;
@@ -404,6 +426,20 @@ export function spawnRunner(options: {
     child.stdout?.setEncoding('utf8');
     child.stdout?.on('data', frames(value => {
       const message = value as Record<string, any>;
+      if (!state.done && message.type === 'tool_execution_start') state.toolCalls += 1;
+      if (!state.done && message.type === 'message_end' && message.message?.role === 'assistant') {
+        const usage = message.message.usage;
+        if (usage && typeof usage.totalTokens === 'number') state.observed = {
+          tokens: (state.observed?.tokens ?? 0) + usage.totalTokens,
+          ...(typeof usage.cost?.total === 'number' ? { cost: (state.observed?.cost ?? 0) + usage.cost.total } : {}),
+        };
+      }
+      const activity = activityOf(message);
+      if (activity && !state.done) emit({ type: 'activity', activity });
+      if (message.type === 'extension_ui_request' && message.method === 'notify' && String(message.message).startsWith(READY_PREFIX)) {
+        try { const data = JSON.parse(String(message.message).slice(READY_PREFIX.length)); if (Array.isArray(data.missing)) ready.resolve?.(data.missing); } catch { /* malformed startup message */ }
+        return;
+      }
       if (message.type === 'response' && typeof message.id === 'number') {
         pending.get(message.id)?.(message);
         pending.delete(message.id);
@@ -520,6 +556,15 @@ export function spawnRunner(options: {
      * conversation, no third party's message, no environment. Acceptance means
      * the prompt was taken, not that the work is done.
      */
+    if (options.verifyCapabilities) {
+      const missing = await within(5_000, capabilities, ['capability handshake unavailable']);
+      if (missing.length || state.done) {
+        terminal({ type: 'failed', reason: `Child capabilities unavailable: ${missing.join(', ')}. Configure extensionPackages explicitly.` });
+        void stop('capabilities unavailable');
+        return { stop, steer };
+      }
+    }
+    if (job.resumeSession) state.baseline = await spent();
     const taken = await within(START_DEADLINE_MS,
       send({ type: 'prompt', message: childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired }) }),
       { success: false, error: 'it never answered' } as Record<string, unknown>);

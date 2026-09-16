@@ -226,3 +226,15 @@ test('a start that failed is nothing to stop, and never becomes the caller’s e
     'whichever ending got there first, it is an ending');
   assert.deepEqual(live(jobs.ledger()), []);
 });
+
+test('a child that cannot acknowledge stop keeps its slot reserved', async () => {
+  const state = { fail: true, started: 0 };
+  const jobs = makeJobs('s', { limits: { ...DEFAULT_LIMITS, concurrency: 1 }, now: () => NOW, persist: () => {},
+    runner: async () => { state.started += 1; return { stop: async () => { if (state.fail) throw new Error('still stopping'); } }; } });
+  const first = await accepted(jobs); const second = await accepted(jobs);
+  await assert.rejects(() => jobs.cancel(first.id, 'cancel'), /still stopping/);
+  assert.equal(find(jobs.ledger(), first.id)?.state, 'stopping');
+  assert.equal(find(jobs.ledger(), second.id)?.state, 'queued'); assert.equal(state.started, 1);
+  state.fail = false; await jobs.cancel(first.id, 'retry'); assert.equal(state.started, 2);
+  await jobs.close('done');
+});

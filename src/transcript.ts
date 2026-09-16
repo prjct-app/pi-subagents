@@ -60,3 +60,38 @@ function entriesOf(message: { role?: string; content?: unknown }): TranscriptEnt
     return [];
   });
 }
+
+export type TranscriptPage = { entries: TranscriptEntry[]; before: number; size: number; next: number; hasMore: boolean };
+/** Bounded reverse pages retain readable paragraphs, rather than irreversible 240-character excerpts. */
+export async function readTranscriptPage(file: string, before?: number, after?: number): Promise<TranscriptPage> {
+  const handle = await open(file, 'r');
+  try {
+    const size = (await handle.stat()).size;
+    const end = Math.min(before ?? size, size);
+    const start = after === undefined ? Math.max(0, end - 256 * 1024) : Math.max(0, Math.min(after, end));
+    const buffer = Buffer.alloc(Math.min(256 * 1024, end - start));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    const first = start > 0 && after === undefined ? buffer.indexOf(10) + 1 : 0;
+    const last = buffer.subarray(0, bytesRead).lastIndexOf(10) + 1;
+    const oversized = bytesRead === 256 * 1024 && last === 0;
+    const next = oversized ? start + bytesRead : start + last;
+    const usable = start > 0 && first === 0 && after === undefined ? Buffer.alloc(0) : buffer.subarray(first, last);
+    const entries = usable.toString('utf8').split('\n').flatMap(line => {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type !== 'message') return [];
+        const message = entry.message;
+        const who: TranscriptEntry['who'] | undefined = message.role === 'user' ? 'task' : message.role === 'assistant' ? 'agent' : message.role === 'toolResult' ? 'tool' : undefined;
+        if (!who || !Array.isArray(message.content)) return [];
+        return message.content.flatMap((part: any) => {
+          if (part.type === 'toolCall') return [{ who: 'tool' as const, text: `${plain(part.name)}\n${plain(JSON.stringify(part.arguments ?? {}))}` }];
+          if (part.type !== 'text') return [];
+          const text = plain(part.text);
+          return [{ who, text: text.length > 16000 ? `${text.slice(0, 16000)}\n[Long entry abbreviated; full text remains in the session file.]` : text }];
+        });
+      } catch { return []; }
+    });
+    if (oversized) entries.unshift({ who: 'tool', text: '[Oversized session frame skipped; inspect the session file for the full entry.]' });
+    return { entries, before: start + first, size, next, hasMore: start > 0 };
+  } finally { await handle.close(); }
+}

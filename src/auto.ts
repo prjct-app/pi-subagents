@@ -49,7 +49,7 @@ export function parseTriage(raw: string): Triage {
     const subtask = item as { role?: unknown; subject?: unknown; task?: unknown };
     if (typeof subtask?.subject !== 'string' || !subtask.subject.trim()) return [];
     if (typeof subtask.task !== 'string' || !subtask.task.trim()) return [];
-    const role: Role = (ROLES as readonly string[]).includes(String(subtask.role)) ? subtask.role as Role : 'explorer';
+    const role: Role = (['explorer', 'reviewer'] as readonly string[]).includes(String(subtask.role)) ? subtask.role as Role : 'explorer';
     return [{ role, subject: subtask.subject.slice(0, 160), task: subtask.task.slice(0, 4000) }];
   }).slice(0, AUTO_MAX);
   return { complex: subtasks.length > 0, subtasks };

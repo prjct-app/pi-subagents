@@ -29,7 +29,7 @@ export type Limits = {
  */
 export const DEFAULT_LIMITS: Limits = {
   concurrency: 2,
-  jobs: 8,
+  jobs: 64,
   taskBytes: 24 * 1024,
   timeoutMs: 5 * 60_000,
   depth: 2,
@@ -37,6 +37,9 @@ export const DEFAULT_LIMITS: Limits = {
 };
 
 export type Request = {
+  resumedFrom?: string;
+  resumeSession?: string;
+  runner?: 'process' | 'in-process';
   role: string;
   subject: string;
   task: string;
@@ -60,7 +63,7 @@ export type Admission =
   | { ok: true; job: Job; ledger: Ledger; repeated: boolean }
   | { ok: false; reason: string };
 
-export const emptyLedger = (session: string): Ledger => ({ v: 1, session, jobs: [] });
+export const emptyLedger = (session: string): Ledger => ({ v: 2, session, jobs: [] });
 
 export const live = (ledger: Ledger): Job[] => ledger.jobs.filter(job => !isTerminal(job.state));
 export const busy = (ledger: Ledger): Job[] =>
@@ -71,7 +74,7 @@ export const settled = (ledger: Ledger): Job[] => ledger.jobs.filter(job => isTe
 export const undelivered = (ledger: Ledger): Job[] => settled(ledger).filter(job => !job.delivered);
 /** Work the parent still owns: a blocker is unresolved even though the job ended. */
 export const unresolved = (ledger: Ledger): Job[] =>
-  ledger.jobs.filter(job => !isTerminal(job.state) || (job.report?.blockers?.length ?? 0) > 0);
+  ledger.jobs.filter(job => !isTerminal(job.state) || (!job.continuedBy && (job.report?.blockers?.length ?? 0) > 0));
 export const find = (ledger: Ledger, jobId: string): Job | undefined => ledger.jobs.find(job => job.id === jobId);
 export const children = (ledger: Ledger, jobId: string): Job[] => ledger.jobs.filter(job => job.parentJobId === jobId);
 
@@ -144,12 +147,16 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
     }
   }
   if (ledger.jobs.length >= limits.jobs) {
-    return { ok: false, reason: `This session has accepted its ${limits.jobs} jobs. Resolve what is open before delegating more.` };
+    return { ok: false, reason: `This session has accepted its ${limits.jobs} jobs. Raise limits.jobs in prjct-subagents.json for a new session; completed jobs still consume this budget.` };
   }
+
+  if (request.resumeSession && live(ledger).some(job => job.resumeSession === request.resumeSession || job.sessionFile === request.resumeSession)) return { ok: false, reason: 'This conversation already has an active continuation.' };
 
   const id = newJobId();
   const job: Job = {
     id,
+    ...(request.resumedFrom ? { resumedFrom: request.resumedFrom, resumeSession: request.resumeSession } : {}),
+    ...(request.runner ? { runner: request.runner } : {}),
     role: request.role as Role,
     name: distinctName(id, live(ledger).map(other => other.name)),
     subject: request.subject.trim(),
@@ -169,7 +176,7 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
     ...(request.parentJobId ? { parentJobId: request.parentJobId } : {}),
     ...(request.key ? { key: request.key } : {}),
   };
-  return { ok: true, job, ledger: { ...ledger, jobs: [...ledger.jobs, job] }, repeated: false };
+  return { ok: true, job, ledger: { ...ledger, jobs: [...ledger.jobs.map(previous => previous.id === request.resumedFrom ? { ...previous, continuedBy: id } : previous), job] }, repeated: false };
 }
 
 /** The queued jobs that may start now, oldest first, within the live cap. */
@@ -253,7 +260,7 @@ function close(ledger: Ledger, job: Job, settlement: Settlement, now: number): L
   const report = settlement.report as Report;
   const state: JobState = report.outcome === 'failed' ? 'failed' : 'completed';
   return replace(ledger, {
-    ...job, state, settled: now, report,
+    ...job, state, settled: now, report, question: undefined,
     ...(settlement.usage ? { usage: settlement.usage } : {}),
   });
 }
@@ -289,4 +296,9 @@ export function recover(ledger: Ledger, now: number): Ledger {
 /** Jobs whose tree has run past the clock, measured from the root's admission. */
 export function expired(ledger: Ledger, now: number, limits: Limits = DEFAULT_LIMITS): Job[] {
   return live(ledger).filter(job => now - rootOf(ledger, job).admitted > limits.timeoutMs);
+}
+
+export function noteQuestion(ledger: Ledger, jobId: string, question?: string): Ledger {
+  const job = find(ledger, jobId);
+  return job ? replace(ledger, { ...job, question }) : ledger;
 }

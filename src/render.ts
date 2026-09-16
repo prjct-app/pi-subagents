@@ -95,7 +95,7 @@ export function collapsed(heading: string) {
 
 /** One job, one line, in the session's own colors. */
 export function themedJobLine(job: Job, theme: Theme): string {
-  return `${theme.bold(plain(job.name))} ${theme.fg('muted', job.role)} ${theme.fg(stateColor(job.state), job.state)} `
+  return `${theme.bold(plain(job.name))} ${theme.fg('muted', job.role)} ${theme.fg(statusOf(job).color, statusOf(job).label)} `
     + `${plain(job.subject)} ${theme.fg('dim', `${seconds(job)}${spent(job)}`)}`;
 }
 
@@ -140,3 +140,12 @@ export function resultContent(jobs: readonly Job[]): string {
     ...(blocked.length > 0 ? ['Blocked jobs are unresolved. Do not call this task done while they are open.'] : []),
   ].join('\n').trim();
 }
+
+/** UI status is an outcome, not merely the runner's terminal state. */
+export function statusOf(job: Job): { label: string; icon: string; color: ReturnType<typeof stateColor> } {
+  if (job.continuedBy) return { label: 'Continued', icon: '↗', color: 'dim' };
+  if (job.question || job.report?.outcome === 'blocked' || (job.report?.blockers.length ?? 0) > 0) return { label: 'Needs attention', icon: '!', color: 'warning' };
+  const labels: Record<JobState, string> = { queued: 'Queued', starting: 'Starting', running: 'Running', stopping: 'Stopping', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', timed_out: 'Timed out', interrupted: 'Interrupted' };
+  return { label: labels[job.state], icon: job.state === 'completed' ? '✓' : job.state === 'running' ? '●' : ['failed', 'timed_out'].includes(job.state) ? '×' : '○', color: stateColor(job.state) };
+}
+export const needsAttention = (job: Job): boolean => !job.continuedBy && (statusOf(job).color === 'warning' && Boolean(job.question || job.report?.outcome === 'blocked' || job.report?.blockers.length) || ['failed', 'timed_out', 'interrupted'].includes(job.state));

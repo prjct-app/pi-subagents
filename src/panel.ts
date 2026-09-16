@@ -41,7 +41,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     query: '', searching: false, help: false, notice: '', pending: '',
     composing: undefined as 'steer' | 'resume' | undefined, scroll: 0, follow: true,
     width: 100, height: 24, pageHeight: 10, contentHeight: 0, disposed: false, history: false,
-    paste: false, pasteValue: '', pasteOversize: false,
+    paste: false, pasteValue: '', pasteOversize: false, confirmStop: '',
   };
   const collapsed = new Set<string>();
   const expandedTools = new Set<string>();
@@ -50,11 +50,13 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   const dim = (text: string): string => theme.fg('dim', text);
   const accent = (text: string): string => theme.fg('accent', text);
   const request = (): void => { if (!state.disposed) tui.requestRender(); };
-  // A small editor viewport preserves space for activity even with a long draft.
-  // Define overrides directly: pi supplies a forwarding Proxy whose setter would otherwise
-  // replace the real TUI's requestRender and make request() recurse into itself.
+  // Keep the editor inside the panel's current height. Define these overrides directly:
+  // pi supplies a forwarding Proxy whose setter would otherwise mutate the real TUI.
+  const editorTerminal = Object.create(tui.terminal, {
+    rows: { get: () => Math.max(5, Math.min(12, state.height - 5)) },
+  });
   const editorTui = Object.create(tui, {
-    terminal: { value: { rows: 16 } },
+    terminal: { value: editorTerminal },
     requestRender: { value: request },
   }) as TUI;
   const editor = new Editor(editorTui, { borderColor: dim, selectList: { selectedPrefix: accent, selectedText: accent, description: dim, scrollInfo: dim, noMatch: dim } }, { paddingX: 0 });
@@ -76,7 +78,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     if (!list.some(row => row.job.id === state.selected)) state.selected = list[0]?.job.id;
     return list.find(row => row.job.id === state.selected)?.job;
   };
-  const resetView = (): void => { state.scroll = 0; state.follow = true; state.history = false; state.notice = ''; };
+  const resetView = (): void => { state.scroll = 0; state.follow = true; state.history = false; state.notice = ''; state.confirmStop = ''; };
   const history = (id: string): History => {
     const cached = histories.get(id);
     if (cached) return cached;
@@ -119,6 +121,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   };
   const refresh = (): void => {
     const job = selected();
+    if (state.confirmStop && (!job || job.id !== state.confirmStop || isTerminal(job.state))) { state.confirmStop = ''; state.notice = ''; }
     if (job && (state.history || !source.activity?.(job.id).length)) {
       // While browsing older pages, incoming text must not replace the viewport.
       if (state.follow || history(job.id).size === -1) void loadHistory(job);
@@ -140,10 +143,10 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   const report = (job: Job, width: number): string[] => {
     const value = job.report;
     if (!value) return [dim(isTerminal(job.state) ? job.reason ?? 'No report was returned.' : 'The report will appear when this agent finishes.'), ...paragraphs(job.question ?? '', width)];
-    return [accent(theme.bold('SUMMARY')), ...paragraphs(value.summary, width), '', accent(theme.bold('ACCEPTANCE CRITERIA')),
-      ...value.criteria.flatMap(item => [theme.fg(item.met === 'yes' ? 'success' : 'warning', `${item.met === 'yes' ? '✓' : item.met === 'no' ? '×' : '?'} ${plain(item.criterion)}`), ...paragraphs(item.evidence, width).map(dim), '']),
-      ...(value.findings.length ? [accent(theme.bold('FINDINGS')), ...value.findings.flatMap(item => [...paragraphs(item.detail, width), ...(item.file ? [dim(`${plain(item.file)}${item.line ? `:${item.line}` : ''}`)] : []), ''])] : []),
-      ...(value.blockers.length ? [theme.fg('warning', theme.bold('NEEDS ATTENTION')), ...value.blockers.flatMap(text => paragraphs(text, width))] : [])];
+    return [accent(theme.bold('SUMMARY')), ...paragraphs(value.summary, width),
+      ...(value.criteria.length ? ['', accent(theme.bold('CRITERIA')), ...value.criteria.flatMap(item => [theme.fg(item.met === 'yes' ? 'success' : 'warning', `${item.met === 'yes' ? '✓' : item.met === 'no' ? '×' : '?'} ${plain(item.criterion)}`), ...paragraphs(item.evidence, width).map(dim)])] : []),
+      ...(value.findings.length ? ['', accent(theme.bold('FINDINGS')), ...value.findings.flatMap(item => [...paragraphs(item.detail, width), ...(item.file ? [dim(`${plain(item.file)}${item.line ? `:${item.line}` : ''}`)] : [])])] : []),
+      ...(value.blockers.length ? ['', theme.fg('warning', theme.bold('NEEDS ATTENTION')), ...value.blockers.flatMap(text => paragraphs(text, width))] : [])];
   };
   const activityLines = (job: Job, width: number): string[] => {
     const activity = state.history ? [] : source.activity?.(job.id) ?? [];
@@ -153,78 +156,114 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
         return [theme.fg(entry.status === 'error' ? 'error' : 'muted', `${open ? '▾' : '▸'} ${entry.text}  ${entry.status ?? ''}`), ...(open && entry.detail ? paragraphs(entry.detail, width).map(dim) : [])];
       }
       const prefix = entry.kind === 'state' ? '○ ' : entry.kind === 'question' ? '! ' : '';
-      return [...paragraphs(`${prefix}${entry.text}`, width).map(text => entry.kind === 'state' ? dim(text) : entry.kind === 'question' ? theme.fg('warning', text) : text), ''];
+      return paragraphs(`${prefix}${entry.text}`, width).map(text => entry.kind === 'state' ? dim(text) : entry.kind === 'question' ? theme.fg('warning', text) : text);
     });
     const cache = history(job.id);
     if (cache.error) return [theme.fg('warning', cache.error)];
-    if (!cache.entries.length) return [dim(cache.reading ? 'Loading history…' : 'Waiting for activity…'), '', ...paragraphs(job.task, width).map(dim)];
-    return [dim(cache.more ? 'PgUp at the top loads earlier history' : 'Beginning of retained history'), '', ...cache.entries.flatMap((entry, index) => {
+    if (!cache.entries.length) return [dim(cache.reading ? 'Loading history…' : 'Waiting for activity…'), ...paragraphs(job.task, width).map(dim)];
+    return [dim(cache.more ? 'PgUp at the top loads earlier history' : 'Beginning of retained history'), ...cache.entries.flatMap((entry, index) => {
       const key = `history:${job.id}:${index}`;
       if (entry.who === 'tool' && !expandedTools.has(key)) return [dim(`▸ tool  ${entry.text.split('\n')[0]}`)];
-      return [accent(entry.who === 'task' ? 'TASK' : entry.who === 'agent' ? 'AGENT' : 'TOOL'), ...paragraphs(entry.text, width), ''];
+      return [accent(entry.who === 'task' ? 'TASK' : entry.who === 'agent' ? 'AGENT' : 'TOOL'), ...paragraphs(entry.text, width)];
     })];
   };
   const detail = (job: Job | undefined, width: number, height: number): string[] => {
-    if (!job) return [accent('Delegate a focused task'), '', ...paragraphs('Agents will appear here with their live activity, evidence and controls.', width).map(dim)];
+    if (!job) {
+      state.pageHeight = height;
+      state.contentHeight = 2;
+      return [accent(theme.bold('No agents yet')), dim('Delegate a focused task; its progress will appear here.')];
+    }
     const status = statusOf(job);
-    const header = [theme.bold(plain(job.subject)), `${accent(job.name)} ${dim(job.role)} · ${theme.fg(status.color, status.label)}`, dim(`${job.modelId} · ${seconds(job)}${spent(job) || ' · cost unknown'}`), '',
-      ['Activity', 'Result', 'Details'].map((tab, index) => index === state.tab ? accent(theme.bold(`${index + 1} ${tab}`)) : dim(`${index + 1} ${tab}`)).join('   '), dim('─'.repeat(width))];
-    const top = state.composing ? header.slice(0, 2) : header;
+    const detailFocus = state.focus === 'detail' ? accent(theme.bold('›')) : ' ';
+    const identity = `${detailFocus} ${theme.fg(status.color, status.icon)} ${accent(theme.bold(job.name))} ${dim(`· ${job.role} · ${status.label} · ${seconds(job)}${spent(job)}`)}`;
+    const title = dim(plain(job.subject));
+    if (state.composing) {
+      state.pageHeight = 0;
+      state.contentHeight = 0;
+      const label = `${state.composing === 'resume' ? 'CONTINUE' : 'MESSAGE'} ${accent(theme.bold(job.name))} ${dim(`· ${editor.getExpandedText().length}/${MAX_DRAFT}`)}`;
+      return [label, ...editor.render(width)].slice(0, height);
+    }
+    const tabs = ['Activity', 'Result', 'Details'].map((tab, index) => index === state.tab ? accent(theme.bold(`[${index + 1} ${tab}]`)) : dim(`${index + 1} ${tab}`)).join('  ');
+    const header = [identity, title, tabs];
     const content = state.tab === 0 ? activityLines(job, width) : state.tab === 1 ? report(job, width) : [
-      accent('TASK'), ...paragraphs(job.task, width), '', accent('EXECUTION'), ...paragraphs(`ID: ${job.id}\nDirectory: ${job.cwd}\nModel: ${job.provider}/${job.modelId}\nRunner: ${job.runner ?? 'process'}\nTools: ${(job.tools ?? []).join(', ')}\nSession: ${job.sessionFile ?? 'not created yet'}${job.resumedFrom ? `\nContinues: ${job.resumedFrom}` : ''}`, width), '',
-      ...(source.limits ? [accent('LIMITS'), ...paragraphs(`${source.ledger()?.jobs.length ?? 0}/${source.limits().jobs} session runs · ${source.limits().concurrency} concurrent\n${source.limits().timeoutMs / 1000}s per tree · depth ${source.limits().depth} · ${source.limits().descendants} descendants`, width)] : [])];
-    const wrapped = content.flatMap(line => wrapTextWithAnsi(line, width));
-    const draft = state.composing ? [accent(`${state.composing === 'resume' ? 'CONTINUE' : 'MESSAGE'} ${job.name} · ${editor.getExpandedText().length}/${MAX_DRAFT}`), ...editor.render(width)] : [];
-    const room = Math.max(1, height - top.length - draft.length - 1);
+      accent('TASK'), ...paragraphs(job.task, width), '', accent('EXECUTION'), ...paragraphs(`ID: ${job.id}\nDirectory: ${job.cwd}\nModel: ${job.provider}/${job.modelId}\nRunner: ${job.runner ?? 'process'}\nTools: ${(job.tools ?? []).join(', ')}\nSession: ${job.sessionFile ?? 'not created yet'}${job.resumedFrom ? `\nContinues: ${job.resumedFrom}` : ''}`, width),
+      ...(source.limits ? ['', accent('LIMITS'), ...paragraphs(`${source.ledger()?.jobs.length ?? 0}/${source.limits().jobs} runs · ${source.limits().concurrency} concurrent\n${source.limits().timeoutMs / 1000}s per tree · depth ${source.limits().depth} · ${source.limits().descendants} descendants`, width)] : [])];
+    const wrapped = content.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width)));
+    const room = Math.max(1, height - header.length);
     state.pageHeight = room;
     state.contentHeight = wrapped.length;
     if (state.follow && state.tab === 0) state.scroll = Math.max(0, wrapped.length - room);
     state.scroll = Math.max(0, Math.min(state.scroll, Math.max(0, wrapped.length - room)));
-    const body = wrapped.slice(state.scroll, state.scroll + room);
-    const position = `${Math.min(wrapped.length, state.scroll + 1)}–${Math.min(wrapped.length, state.scroll + room)} / ${wrapped.length}`;
-    return [...top, ...body, ...Array.from({ length: Math.max(0, room - body.length) }, () => ''), dim(`${state.follow && state.tab === 0 ? 'Following' : 'Browsing'} · ${position}${state.tab === 0 ? ' · h history · t tool details' : ''}`), ...draft];
+    return [...header, ...wrapped.slice(state.scroll, state.scroll + room)];
   };
-  const tree = (width: number, height: number): string[] => {
+  const tree = (width: number, height: number, showSubject: boolean): string[] => {
     const list = visible();
     const focus = selected();
     const index = list.findIndex(row => row.job.id === focus?.id);
-    const capacity = Math.max(1, Math.floor((height - 2) / 3));
-    const from = Math.max(0, Math.min(index - Math.floor(capacity / 2), list.length - capacity));
-    const head = state.searching ? search.render(width) : [dim(state.query ? `/ ${plain(state.query)}` : '/ Search agents')];
-    const body = list.slice(from, from + capacity).flatMap(({ job, depth }) => {
+    const head = state.searching ? search.render(width) : state.query ? [dim(`/ ${plain(state.query)} · ${list.length} match${list.length === 1 ? '' : 'es'}`)] : [];
+    const capacity = Math.max(1, height - head.length);
+    const from = Math.max(0, Math.min(index - Math.floor(capacity / 2), Math.max(0, list.length - capacity)));
+    const body = list.slice(from, from + capacity).map(({ job, depth }) => {
       const status = statusOf(job);
       const chosen = job.id === focus?.id;
       const branch = allRows().some(row => row.job.parentJobId === job.id) ? collapsed.has(job.id) ? '▸' : '▾' : depth ? '└' : ' ';
-      const name = `${chosen ? '›' : ' '} ${' '.repeat(Math.min(depth, 4))}${branch} ${job.name}`;
-      return [chosen ? accent(theme.bold(name)) : plain(name), `   ${theme.fg(status.color, `${status.icon} ${status.label}`)} ${dim(seconds(job))}`, `   ${dim(plain(job.subject))}`];
+      const lead = chosen && state.focus === 'tree' ? accent(theme.bold('›')) : ' ';
+      const name = chosen ? accent(theme.bold(job.name)) : plain(job.name);
+      const subject = showSubject ? dim(` — ${plain(job.subject)}`) : '';
+      return `${lead} ${' '.repeat(Math.min(depth, 3))}${dim(branch)} ${theme.fg(status.color, status.icon)} ${name} ${dim(`· ${status.label} ${seconds(job)}`)}${subject}`;
     });
-    return [...head, '', ...(body.length ? body : [dim('No matching agents.')])];
+    return [...head, ...(body.length ? body : [dim('No matching agents.')])];
   };
   const render = (width: number): string[] => {
     state.width = width;
-    const terminalHeight = tui.terminal?.rows ?? 30;
-    state.height = Math.max(8, Math.floor(terminalHeight * 0.9));
     const all = source.ledger()?.jobs ?? [];
+    const terminalHeight = tui.terminal?.rows ?? 30;
+    if (width <= 0 || terminalHeight <= 0) { state.height = 0; return []; }
+    const wide = width >= 96;
+    const compactTreeHeight = all.length + 4 + (state.searching || state.query ? 1 : 0);
+    const draftWidth = Math.max(1, width - 4);
+    const draftRows = editor.getExpandedText().split('\n').reduce((count, line) => count + Math.max(1, Math.ceil(visibleWidth(line) / draftWidth)), 0);
+    const composeHeight = 7 + Math.min(5, draftRows);
+    const preferredHeight = state.help ? (width < 56 ? 12 : 11) : state.composing ? composeHeight
+      : !wide && state.focus === 'tree' ? Math.max(8, Math.min(24, compactTreeHeight))
+      : wide ? Math.max(12, Math.min(24, all.length + 10)) : 14;
+    state.height = Math.min(preferredHeight, Math.max(1, terminalHeight));
+    if (width < 24 || state.height < 6) {
+      return [accent(theme.bold('Esc close')), dim('Need a 24×6 terminal')].slice(0, state.height).map(line => fit(` ${line}`, width));
+    }
     const active = all.filter(job => !isTerminal(job.state) && job.state !== 'queued').length;
     const queue = all.filter(job => job.state === 'queued').length;
     const attention = all.filter(needsAttention).length;
-    const head = ` ${theme.bold('AGENTS')}  ${accent(`${active} active`)}  ${dim(`${queue} queued`)}  ${attention ? theme.fg('warning', `${attention} need attention`) : dim('All clear')}`;
-    const filters = ['All', 'Active', 'Attention'].map((text, index) => index === state.filter ? accent(`[${text}]`) : dim(text)).join('  ');
-    const bodyHeight = Math.max(2, state.height - 6);
-    const wide = width >= 100;
-    const leftWidth = Math.min(40, Math.floor(width * 0.34));
-    const rightWidth = wide ? width - leftWidth - 4 : width - 4;
+    const filter = ['ALL', 'ACTIVE', 'ATTENTION'][state.filter];
+    const stats = width < 56
+      ? `${accent(`●${active}`)}  ${dim(`○${queue}`)}  ${attention ? theme.fg('warning', `!${attention}`) : dim('!0')}`
+      : `${accent(`● ${active} running`)}  ${dim(`○ ${queue} queued`)}  ${attention ? theme.fg('warning', `! ${attention} attention`) : dim('! 0 attention')}`;
+    const head = ` ${theme.bold('AGENTS')}  ${stats}  ${accent(filter)}`;
+    const bodyHeight = Math.max(2, state.height - 4);
+    const leftWidth = wide ? Math.min(34, Math.max(26, Math.floor(width * 0.3))) : Math.max(1, width - 2);
+    const rightWidth = wide ? Math.max(1, width - leftWidth - 3) : Math.max(1, width - 2);
     const job = selected();
-    const left = tree(wide ? leftWidth - 2 : width - 4, bodyHeight);
-    const right = detail(job, Math.max(1, rightWidth), bodyHeight);
-    const help = ['NAVIGATION', '↑↓ / j k  Move or scroll', 'Tab  Switch tree / detail', '← →  Fold / unfold tree', '1 2 3  Activity / Result / Details', 'f  All / Active / Attention', '/  Search · Esc clear / return', 'PgUp/PgDn  Scroll · End follow', 'h  Retained history · t tool details', '', 'ACTIONS', 's  Message a live agent', 'r  Continue a retained conversation', 'x  Stop selected agent and descendants', 'Ctrl+Enter / Ctrl+S  Send message', 'Enter  New line while composing', 'Esc  Keep draft and return', '?  Close help'];
+    const left = tree(leftWidth, bodyHeight, !wide && rightWidth >= 56);
+    const right = detail(job, rightWidth, bodyHeight);
+    const help = width < 56
+      ? ['↑↓/jk  move / scroll', 'Enter  open selected', 'Tab  agents / detail', '1/2/3  switch view', '/ search · f filter', 's message · r continue', 'x x stop · h history · t tools', 'Esc  back / close']
+      : ['↑↓ / j k  move or scroll · Enter open · Tab switch pane', '1 / 2 / 3  activity, result, details', '/ search · f filter agents', 's message · r continue · x x stop', 'h retained history · t expand tool output', 'PgUp / PgDn page · Home top · End follow', 'Esc back or close · ? toggle help'];
     const body = Array.from({ length: bodyHeight }, (_, index) => {
-      if (state.help) return `  ${fit(index < help.length ? plain(help[index]) : '', width - 4)}  `;
-      if (!wide) return `  ${fit((state.focus === 'tree' && !state.composing ? left : right)[index] ?? '', width - 4)}  `;
-      return ` ${fit(left[index] ?? '', leftWidth - 1)} ${dim('│')} ${fit(right[index] ?? '', rightWidth)} `;
+      if (state.help) return ` ${fit(index < help.length ? plain(help[index]) : '', Math.max(1, width - 2))} `;
+      if (!wide) return ` ${fit((state.focus === 'tree' && !state.composing ? left : right)[index] ?? '', Math.max(1, width - 2))} `;
+      return `${fit(left[index] ?? '', leftWidth)} ${dim('│')} ${fit(right[index] ?? '', rightWidth)}`;
     });
-    const footer = state.composing ? 'Enter new line · Ctrl+Enter / Ctrl+S send · Esc keep draft' : 'Tab focus · / search · f filter · s message · r resume · x stop · ? help';
-    return [fit(head, width), fit(` ${filters}  ${dim(`${all.length}/${source.limits?.().jobs ?? 64} runs`)} ${dim(state.focus === 'tree' ? '· Agents' : '· Detail')}`, width), dim('─'.repeat(width)), ...body, dim('─'.repeat(width)), fit(` ${state.pending || state.notice || footer}`, width), fit(` ${state.pending || state.notice ? footer : '↑↓ navigate · 1 2 3 views · Esc back / close'}`, width)];
+    const position = state.contentHeight > state.pageHeight && state.pageHeight > 0
+      ? `${Math.min(state.contentHeight, state.scroll + 1)}–${Math.min(state.contentHeight, state.scroll + state.pageHeight)}/${state.contentHeight}`
+      : '';
+    const narrow = width < 56;
+    const hints = state.help ? narrow ? '↑↓ scroll · ?/Esc close' : 'Esc close help'
+      : state.searching ? narrow ? '/ find · Enter done · Esc clear' : 'Type to filter · Enter apply · Esc cancel'
+      : state.composing ? narrow ? 'Ctrl+S send · Esc save draft' : 'Enter newline · Ctrl+Enter / Ctrl+S send · Esc save draft'
+      : state.focus === 'tree' ? narrow ? '↑↓ move · Enter open · / find · Esc' : '↑↓ select · Enter open · / search · f filter · ? help · Esc close'
+      : narrow ? `↑↓ ${position || 'scroll'} · s msg · Esc back` : `↑↓ scroll${position ? ` ${position}` : ''} · Tab agents · 1–3 view · s message · x stop · Esc back`;
+    const footer = state.pending ? accent(state.pending) : state.notice ? theme.fg('warning', state.notice) : dim(hints);
+    return [fit(head, width), dim('─'.repeat(width)), ...body, dim('─'.repeat(width)), fit(` ${footer}`, width)];
   };
 
   const leaveEditor = (): void => {
@@ -291,6 +330,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       else { search.handleInput(data); search.setValue(plain(search.getValue()).slice(0, 160)); state.query = search.getValue(); resetView(); }
       request(); return;
     }
+    if (state.confirmStop && matchesKey(data, Key.escape)) { state.confirmStop = ''; state.notice = ''; request(); return; }
+    if (state.confirmStop && data !== 'x') { state.confirmStop = ''; state.notice = ''; }
     const job = selected();
     if (matchesKey(data, Key.escape) || data === 'q') {
       if (state.query) { state.query = ''; search.setValue(''); }
@@ -306,8 +347,14 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     else if (data === 'x' && job && !isTerminal(job.state) && !state.pending) {
       const ledger = source.ledger();
       const descendants = ledger ? jobDescendants(ledger, job.id).length : 0;
-      state.pending = `Stopping ${job.name}${descendants ? ` and its subtree (${descendants} descendants)` : ''}…`;
-      void source.cancel(job.id, 'Stopped from the agents panel.').then(() => { state.notice = `${job.name} stopped.`; }, error => { state.notice = plain(String(error)); }).finally(() => { state.pending = ''; request(); });
+      if (state.confirmStop !== job.id) {
+        state.confirmStop = job.id;
+        state.notice = `Stop ${job.name}${descendants ? ` + ${descendants} descendant${descendants === 1 ? '' : 's'}` : ''}? x confirm · Esc cancel`;
+      } else {
+        state.confirmStop = '';
+        state.pending = `Stopping ${job.name}${descendants ? ` and its subtree (${descendants} descendants)` : ''}…`;
+        void source.cancel(job.id, 'Stopped from the agents panel.').then(() => { state.notice = `${job.name} stopped.`; }, error => { state.notice = plain(String(error)); }).finally(() => { state.pending = ''; request(); });
+      }
     } else if (matchesKey(data, Key.enter)) { state.focus = 'detail'; if (job && isTerminal(job.state)) state.tab = 1; resetView(); }
     else if (matchesKey(data, Key.left) && job && state.focus === 'tree') collapsed.add(job.id);
     else if (matchesKey(data, Key.right) && job && state.focus === 'tree') collapsed.delete(job.id);
@@ -345,5 +392,5 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
 
 export async function openAgentsPanel(ctx: ExtensionCommandContext, source: PanelSource): Promise<void> {
   await ctx.ui.custom<null>((tui, theme, _keys, done) => agentsPanel(source, tui, theme, () => done(null)),
-    { overlay: true, overlayOptions: { width: '95%', maxHeight: '90%' } });
+    { overlay: true, overlayOptions: { width: 110, maxHeight: 24, margin: { left: 1, right: 1 } } });
 }

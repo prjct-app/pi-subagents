@@ -12,10 +12,11 @@ child Pi process for each active job; a native in-process runner is opt-in.
 
 ## Watch and control work
 
-Open **`/agents`**. Wide terminals show the agent tree beside the selected job;
-terminals below 100 panel columns switch between the two views. Activity, full
-reports and execution details have independent purposes: see what is happening,
-check the evidence, then inspect capabilities and limits.
+Open **`/agents`**. The panel stays bounded at 110 columns by 24 rows and shrinks
+to the available terminal space. Wide layouts keep a compact agent list beside the
+selected job; narrow layouts use a one-row list and drill down without losing the
+selection. Activity, reports and execution details remain separate: see what is
+happening, check the evidence, then inspect capabilities and limits.
 
 - Search by name, task or job ID; filter All, Active or Attention.
 - Fold delegation trees, scroll activity and inspect tool output.
@@ -23,7 +24,7 @@ check the evidence, then inspect capabilities and limits.
   **Needs attention**, even when their execution has finished.
 - Send multiline instructions without losing your draft after a failed send.
 - Continue a retained conversation as a new execution, preserving previous reports.
-- Keep the parent chat readable: one compact summary replaces per-agent widget rows.
+- Keep the parent chat readable: one compact summary appears only while subagents are running.
 
 | Key | Action |
 | --- | --- |
@@ -39,7 +40,7 @@ check the evidence, then inspect capabilities and limits.
 | `t` | Expand / collapse tool details |
 | `s` | Message a live agent |
 | `r` | Continue a finished agent |
-| `x` | Stop an agent and its descendants |
+| `x` twice | Confirm, then stop an agent and its descendants |
 | `?` | Keyboard help |
 | `Esc` | Keep draft / go back / close |
 

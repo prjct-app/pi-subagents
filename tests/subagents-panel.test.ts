@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { performance } from 'node:perf_hooks';
-import { visibleWidth } from '@earendil-works/pi-tui';
+import { CURSOR_MARKER, visibleWidth } from '@earendil-works/pi-tui';
 import { agentsPanel, rows, type PanelSource } from '../src/panel.ts';
 import { statusOf } from '../src/render.ts';
 import { newJobId, type Job, type Ledger } from '../src/schema.ts';
@@ -51,32 +51,70 @@ test('tree order survives missing parents and malicious cycles', () => {
 });
 
 test('responsive views fit each supported terminal and a long Unicode task', t => {
-  for (const [width, height] of [[60, 20], [80, 24], [120, 40], [160, 50]]) {
+  for (const [width, height] of [[40, 12], [60, 20], [80, 24], [120, 40], [160, 50]]) {
     const h = harness([job({ subject: '検証 👩🏽‍💻 é '.repeat(30) })], {}, height); t.after(() => h.panel.dispose());
     for (const key of ['', '\t', '2', '3', 's']) {
       if (key) h.panel.handleInput(key);
       const lines = h.panel.render(width);
-      assert.ok(lines.length <= Math.floor(height * 0.9));
+      assert.ok(lines.length <= height);
       assert.ok(lines.every(line => visibleWidth(line) <= width), `${width}x${height}: ${lines.find(line => visibleWidth(line) > width)}`);
     }
   }
 });
 
+test('transient zero sizes and unusably small terminals remain safe and closable', t => {
+  const zero = harness(undefined, {}, 0); t.after(() => zero.panel.dispose());
+  assert.deepEqual(zero.panel.render(0), []);
+
+  const tiny = harness(undefined, {}, 5); t.after(() => tiny.panel.dispose());
+  const lines = tiny.panel.render(20);
+  assert.ok(lines.length <= 5);
+  assert.ok(lines.every(line => visibleWidth(line) <= 20));
+  assert.match(lines.join('\n'), /Esc close/);
+  tiny.panel.handleInput('\x1b');
+  assert.equal(tiny.store.closed, 1);
+});
+
+test('compact layout keeps every agent scannable and leaves room for detail at 40x12', t => {
+  const names = ['Ada', 'Nadia', 'Iris', 'Theo', 'Rhea'];
+  const h = harness(names.map(name => job({ name })), {}, 12); t.after(() => h.panel.dispose());
+  const tree = h.panel.render(40);
+  assert.ok(tree.length <= 10);
+  assert.ok(tree.every(line => visibleWidth(line) <= 40));
+  for (const name of names) assert.match(tree.join('\n'), new RegExp(name));
+
+  h.panel.handleInput('\r');
+  const detail = h.panel.render(40).join('\n');
+  assert.match(detail, /Ada.*worker/);
+  assert.match(detail, /Activity/);
+});
+
+test('the message editor keeps its cursor visible with a long draft at 40x12', t => {
+  const h = harness(undefined, {}, 12); t.after(() => h.panel.dispose());
+  h.panel.handleInput('s');
+  h.panel.focused = true;
+  h.panel.handleInput(Array.from({ length: 80 }, (_, index) => `word${index}`).join(' '));
+  const lines = h.panel.render(40);
+  assert.equal(lines.length, 12);
+  assert.ok(lines.every(line => visibleWidth(line) <= 40));
+  assert.ok(lines.some(line => line.includes(CURSOR_MARKER)), 'the visible editor viewport must retain the cursor');
+});
+
 test('wide view shows tree and detail; narrow view switches without losing selection', t => {
   const h = harness([job({ name: 'Ada' }), job({ name: 'Nadia', subject: 'Audit evidence' })]); t.after(() => h.panel.dispose());
   h.panel.handleInput('j');
-  assert.match(h.text(), /Nadia worker/);
+  assert.match(h.text(), /Nadia.*worker/);
   h.panel.handleInput('\t');
   assert.match(h.text(60), /Audit evidence/);
   h.panel.handleInput('\x1b');
-  assert.match(h.text(60), /›\s+Nadia/);
+  assert.match(h.text(60), /›\s+.*Nadia/);
 });
 
 test('blocked reports are attention, never green completed', t => {
   const blocked = job({ state: 'completed', report: { outcome: 'blocked', summary: 'Need an API decision.', criteria: [], findings: [], blockers: ['Which endpoint?'] } });
   assert.equal(statusOf(blocked).color, 'warning');
   const h = harness([blocked]); t.after(() => h.panel.dispose());
-  assert.match(h.text(), /1 need attention/);
+  assert.match(h.text(), /1 attention/);
   h.panel.handleInput('2');
   assert.match(h.text(), /Which endpoint/);
 });
@@ -84,9 +122,9 @@ test('blocked reports are attention, never green completed', t => {
 test('filters, search and selection remain tied to IDs during changes', t => {
   const a = job({ name: 'Ada', state: 'completed' }); const b = job({ name: 'Nadia' });
   const h = harness([a, b]); t.after(() => h.panel.dispose());
-  h.panel.handleInput('f'); assert.match(h.text(), /Nadia worker/);
+  h.panel.handleInput('f'); assert.match(h.text(), /Nadia.*worker/);
   h.store.jobs = [job({ name: 'Zoe' }), b, a]; h.store.listener();
-  assert.match(h.text(), /Nadia worker/);
+  assert.match(h.text(), /Nadia.*worker/);
   h.panel.handleInput('/'); h.panel.handleInput('Ada'); h.panel.handleInput('\r');
   assert.match(h.text(), /No matching agents/);
   h.panel.handleInput('\x1b'); h.panel.handleInput('f'); h.panel.handleInput('f');
@@ -147,12 +185,18 @@ test('resume selects the new execution and preserves the old report', async t =>
   const a = job({ state: 'completed', name: 'Ada' }); const next = job({ name: 'Nadia' });
   const h = harness([a], { resume: async () => { h.store.jobs.push(next); return next; } }); t.after(() => h.panel.dispose());
   h.panel.handleInput('r'); h.panel.handleInput('Use the new endpoint'); h.panel.handleInput('\x13'); await tick();
-  assert.match(h.text(), /Nadia worker/); assert.equal(a.state, 'completed');
+  assert.match(h.text(), /Nadia.*worker/); assert.equal(a.state, 'completed');
 });
 
-test('cancel goes through the common controller and cannot target a terminal job', async t => {
+test('cancel names its target, requires confirmation, and cannot target a terminal job', async t => {
   const a = job(); const h = harness([a]); t.after(() => h.panel.dispose());
-  h.panel.handleInput('x'); await tick(); assert.deepEqual(h.store.stops, [a.id]);
+  h.panel.handleInput('x');
+  assert.deepEqual(h.store.stops, []);
+  assert.match(h.text(), new RegExp(`Stop ${a.name}.*x confirm.*Esc cancel`));
+  h.panel.handleInput('\x1b');
+  assert.doesNotMatch(h.text(), /x confirm/);
+  h.panel.handleInput('x'); h.panel.handleInput('x'); await tick();
+  assert.deepEqual(h.store.stops, [a.id]);
   h.store.jobs = [{ ...a, state: 'completed' }]; h.panel.handleInput('x'); assert.equal(h.store.stops.length, 1);
 });
 
@@ -168,7 +212,7 @@ test('history errors remain retryable, and disposal unsubscribes', async t => {
 test('empty state and help fit small terminals and escape returns before closing', t => {
   const h = harness([], {}, 24); t.after(() => h.panel.dispose());
   assert.match(h.text(), /Delegate a focused task/);
-  h.panel.handleInput('?'); assert.match(h.text(80), /NAVIGATION/);
+  h.panel.handleInput('?'); assert.match(h.text(80), /Enter open/);
   h.panel.handleInput('\x1b'); assert.equal(h.store.closed, 0);
   h.panel.handleInput('\x1b'); assert.equal(h.store.closed, 1);
 });

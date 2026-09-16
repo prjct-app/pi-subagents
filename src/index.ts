@@ -240,9 +240,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const active = all.filter(job => !isTerminal(job.state) && job.state !== 'queued');
     const queued = all.filter(job => job.state === 'queued');
     const attention = all.filter(needsAttention);
-    const text = active.length || queued.length || attention.length
-      ? `Agents  ${active.length} active · ${queued.length} queued · ${attention.length} need attention · ${all.length}/${state.settings.limits.jobs} runs · /agents`
-      : undefined;
+    const statuses = [`● ${active.length}`, ...(queued.length ? [`○ ${queued.length}`] : []), ...(attention.length ? [`! ${attention.length}`] : [])];
+    const text = active.length ? `󰚩  Agents  ${statuses.join('  ')}  /agents` : undefined;
     if (text === state.widget) return;
     state.widget = text;
     context.ui.setWidget('agents', text === undefined ? undefined : [text]);

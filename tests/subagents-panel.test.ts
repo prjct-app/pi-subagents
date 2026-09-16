@@ -1,354 +1,161 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { test } from 'node:test';
-import { CURSOR_MARKER } from '@earendil-works/pi-tui';
-import { agentsPanel, rows } from '../src/panel.ts';
+import { performance } from 'node:perf_hooks';
+import { visibleWidth } from '@earendil-works/pi-tui';
+import { agentsPanel, rows, type PanelSource } from '../src/panel.ts';
+import { statusOf } from '../src/render.ts';
 import { newJobId, type Job, type Ledger } from '../src/schema.ts';
+import type { Activity } from '../src/activity.ts';
 
-/** A job, with only what the panel reads. */
-const job = (over: Partial<Job> = {}): Job => ({
-  id: newJobId(), role: 'explorer', name: 'Nadia', subject: 'map the store',
-  task: 'Read it.', context: '', provider: 'openai-codex', modelId: 'gpt-5.4-mini',
-  cwd: '/work', state: 'running', depth: 0, admitted: 1, started: 2, ...over,
-});
-
-const ledger = (jobs: Job[]): Ledger => ({ v: 1, session: 's1', jobs });
-
-/** Theme and TUI doubles: color is identity, rendering is counted. */
-const theme: any = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
-const tui = () => {
-  const state = { renders: 0 };
-  return { state, tui: { requestRender: () => { state.renders += 1; } } as any };
-};
-
-test('rows come in tree order with the depth they are drawn at', () => {
-  const root = job({ name: 'Ada' });
-  const child = job({ name: 'Omar', parentJobId: root.id, depth: 1 });
-  const grandchild = job({ name: 'Iris', parentJobId: child.id, depth: 2 });
-  const other = job({ name: 'Rhea' });
-  // Roots keep ledger order; children nest under their parent wherever it sits.
-  const all = rows(ledger([grandchild, other, child, root]));
-  assert.deepEqual(all.map(row => row.job.name), ['Rhea', 'Ada', 'Omar', 'Iris']);
-  assert.deepEqual(all.map(row => row.depth), [0, 0, 1, 2]);
-  assert.deepEqual(rows(undefined), []);
-});
-
-test('the panel renders the ledger, moves, unfolds a report, and closes on escape', (t) => {
-  const done = job({ name: 'Ada', state: 'completed', settled: 10,
-    report: { outcome: 'completed', summary: 'Mapped it.', criteria: [], findings: [], blockers: [] } });
-  const live = job({ name: 'Omar' });
-  const { state, tui: tt } = tui();
-  const closed: null[] = [];
-  const panel = agentsPanel({ ledger: () => ledger([done, live]), cancel: async () => {}, steer: async () => true }, tt, theme, () => closed.push(null));
-  t.after(() => panel.dispose());
-  const text = panel.render(100).join('\n');
-  assert.match(text, /2 live · 2 total|1 live · 2 total/);
-  assert.match(text, /Ada/);
-  assert.match(text, /Omar/);
-  // Down to Omar, back up to Ada, unfold her report, fold it again.
-  panel.handleInput('\x1b[B');
-  panel.handleInput('\x1b[A');
-  panel.handleInput('\r');
-  assert.match(panel.render(100).join('\n'), /Mapped it\./);
-  panel.handleInput('\r');
-  assert.doesNotMatch(panel.render(100).join('\n'), /Mapped it\./);
-  panel.handleInput('\x1b');
-  assert.equal(closed.length, 1, 'escape closes the panel');
-  assert.ok(state.renders > 0, 'every key repaints');
-});
-
-test('x stops the selected live job through the same cancel path, never a settled one', async (t) => {
-  const settled = job({ name: 'Ada', state: 'completed', settled: 10 });
-  const live = job({ name: 'Omar' });
-  const stopped: { id: string; reason: string }[] = [];
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger([settled, live]),
-    cancel: async (jobId, reason) => { stopped.push({ id: jobId, reason }); },
-    steer: async () => true,
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('x');
-  assert.deepEqual(stopped, [], 'a settled job is not stopped again');
-  panel.handleInput('\x1b[B');
-  panel.handleInput('x');
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(stopped, [{ id: live.id, reason: 'Stopped from the agents panel.' }]);
-});
-
-test('enter on a live job takes over its transcript, typing steers it, esc returns', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-takeover-'));
-  const file = join(root, 'child.jsonl');
-  await writeFile(file, [
-    JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Map the store.' }] } }),
-    JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Reading src/store.' }] } }),
-  ].join('\n'));
-  const live = job({ name: 'Omar', sessionFile: file });
-  const steered: string[] = [];
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger([live]),
-    cancel: async () => {},
-    steer: async (_id, message) => { steered.push(message); return true; },
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-
-  panel.handleInput('\r');
-  // The transcript loads from the file, asynchronously, on open and on repaint.
-  const deadline = Date.now() + 1_000;
-  while (panel.render(100).join('\n').includes('Nothing on the transcript yet.')) {
-    assert.ok(Date.now() < deadline, 'the transcript arrived');
-    await new Promise(resolve => setTimeout(resolve, 10));
-  }
-  const view = panel.render(100).join('\n');
-  assert.match(view, /Map the store\./, 'the transcript is the child\'s own file');
-  assert.match(view, /Reading src\/store\./);
-  assert.match(view, /type to steer/);
-
-  for (const key of 'focus the queue') panel.handleInput(key);
-  panel.handleInput('\r');
-  assert.deepEqual(steered, ['focus the queue']);
-
-  panel.handleInput('\x1b');
-  assert.doesNotMatch(panel.render(100).join('\n'), /type to steer/, 'esc returns to the list');
-  await rm(root, { recursive: true, force: true });
-});
-
-test('enter on a live job without a transcript says so instead of opening an empty view', (t) => {
-  const live = job({ name: 'Omar' });
-  const { tui: t2 } = tui();
-  const panel = agentsPanel({ ledger: () => ledger([live]), cancel: async () => {}, steer: async () => true }, t2, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('\r');
-  assert.match(panel.render(100).join('\n'), /has not said where its transcript lives/);
-});
-
-test('a steered draft is sanitized and capped: no control codes, no epics', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-draft-'));
-  const file = join(root, 'child.jsonl');
-  await writeFile(file, JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'work' }] } }));
-  const live = job({ name: 'Omar', sessionFile: file });
-  const steered: string[] = [];
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger([live]), cancel: async () => {},
-    steer: async (_id, message) => { steered.push(message); return true; },
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('\r');
-  // Control sequences and control characters never leave the panel: the
-  // editor ignores the escape run, and clean() strips the bell.
-  for (const key of 'read ') panel.handleInput(key);
-  panel.handleInput('\x1b[31m');
-  for (const key of 'the queue') panel.handleInput(key);
-  panel.handleInput('\x07');
-  panel.handleInput('\r');
-  assert.equal(steered.length, 1);
-  assert.equal(steered[0], 'read the queue', 'controls never reach the child');
-  // An epic draft is capped at a sentence.
-  panel.handleInput('x'.repeat(600));
-  panel.handleInput('\r');
-  assert.ok((steered[1]?.length ?? 0) <= 240, 'a steer is a sentence, not a file');
-  await rm(root, { recursive: true, force: true });
-});
-
-test('a job that settles while watched becomes a report with one way out', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-settled-'));
-  const file = join(root, 'child.jsonl');
-  await writeFile(file, JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'work' }] } }));
-  const live = job({ name: 'Omar', sessionFile: file });
-  const store = { job: live };
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger([store.job]), cancel: async () => {}, steer: async () => true,
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('\r');
-  store.job = { ...live, state: 'completed', settled: 10 };
-  const view = panel.render(100).join('\n');
-  assert.match(view, /settled as completed/, 'the footer tells the truth about a settled job');
-  assert.doesNotMatch(view, /type to steer/);
-  panel.handleInput('x');
-  panel.handleInput('\x1b');
-  assert.doesNotMatch(panel.render(100).join('\n'), /settled as/, 'esc still returns to the list');
-  await rm(root, { recursive: true, force: true });
-});
-
-test('a bracketed paste carrying control sequences never reaches the screen', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-paste-'));
-  const file = join(root, 'child.jsonl');
-  await writeFile(file, JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'work' }] } }));
-  const live = job({ name: 'Omar', sessionFile: file });
-  const steered: string[] = [];
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger([live]), cancel: async () => {},
-    steer: async (_id, message) => { steered.push(message); return true; },
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('\r');
-  // A paste block with a color sequence and a bell inside it.
-  panel.handleInput('\x1b[200~read\n\t\x1b[31mthe queue\x07 now\x1b[201~');
-  // Two things on that line are pi-tui's own, not the draft's: the cursor
-  // marker (the renderer strips it to place the hardware cursor) and the
-  // reverse-video block it draws as the caret. What must not survive is the
-  // payload that came in: the pasted color sequence and the bell.
-  const drawn = panel.render(100).join('\n').split(CURSOR_MARKER).join('');
-  assert.doesNotMatch(drawn, /\x1b\[31m|\x07/, 'the pasted controls never reach the screen');
-  assert.match(drawn, /read the queue now/, 'the words do');
-  panel.handleInput('\r');
-  assert.equal(steered.length, 1);
-  assert.doesNotMatch(steered[0], /[\x00-\x1f\x7f]/, 'and nothing raw reaches the child either');
-  await rm(root, { recursive: true, force: true });
-});
-
-test('a failed final read is retried, so the takeover shows how the job ended', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-retry-'));
-  const file = join(root, 'child.jsonl');
-  await writeFile(file, 'x');
-  const store = { job: job({ name: 'Omar', sessionFile: file }) };
-  const calls: number[] = [];
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger([store.job]),
-    cancel: async () => {},
-    steer: async () => true,
-    transcript: async () => {
-      calls.push(calls.length + 1);
-      if (calls.length === 1) throw new Error('EBUSY');
-      return [{ who: 'agent' as const, text: 'the last word' }];
-    },
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('\r');
-  // The job settles while it is being watched; the first read fails.
-  store.job = { ...store.job, state: 'completed', settled: 10 };
-  const deadline = Date.now() + 3_000;
-  while (!panel.render(100).join('\n').includes('the last word')) {
-    assert.ok(Date.now() < deadline, 'a failed read is not the last word');
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-  assert.ok(calls.length >= 2, 'the retry happened');
-  await rm(root, { recursive: true, force: true });
-});
-
-test('the panel is Focusable and hands the focus to its embedded editor', () => {
-  const live = job({ name: 'Omar' });
-  const { tui: tt } = tui();
-  const panel = agentsPanel({ ledger: () => ledger([live]), cancel: async () => {}, steer: async () => true }, tt, theme, () => {});
-  panel.focused = true;
-  assert.equal(panel.focused, true, 'the container reports what the editor holds');
-  panel.focused = false;
-  assert.equal(panel.focused, false);
-  panel.dispose();
-});
-
-test('an abandoned transcript read cannot release the next job read lock', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-read-owner-'));
-  const fileA = join(root, 'a.jsonl');
-  const fileB = join(root, 'b.jsonl');
-  await Promise.all([writeFile(fileA, 'a'), writeFile(fileB, 'b')]);
-  const a = job({ name: 'Ada', sessionFile: fileA });
-  const b = job({ name: 'Omar', sessionFile: fileB });
-  const store = { jobs: [a, b] };
-  const deferred = () => {
-    const slot = { resolve: (_entries: { who: 'agent'; text: string }[]) => {} };
-    const promise = new Promise<{ who: 'agent'; text: string }[]>(resolve => { slot.resolve = resolve; });
-    return { promise, resolve: slot.resolve };
+const job = (over: Partial<Job> = {}): Job => ({ id: newJobId(), role: 'worker', name: 'Omar', subject: 'Implement cancellation', task: 'Fix the cancellation race and validate the result.', context: '', provider: 'test', modelId: 'local', cwd: '/work', state: 'running', depth: 0, admitted: Date.now(), started: Date.now(), ...over });
+const theme: any = { fg: (_: string, text: string) => text, bold: (text: string) => text };
+const tick = () => new Promise(resolve => setImmediate(resolve));
+function harness(jobs: Job[] = [job()], over: Partial<PanelSource> = {}, height = 40) {
+  const store = { jobs, closed: 0, renders: 0, listener: () => {}, activity: [] as Activity[], steers: [] as string[], stops: [] as string[] };
+  const source: PanelSource = {
+    ledger: (): Ledger => ({ v: 2, session: 'test', jobs: store.jobs }),
+    steer: async (_id, message) => { store.steers.push(message); return true; },
+    cancel: async id => { store.stops.push(id); },
+    activity: () => store.activity,
+    subscribe: listener => { store.listener = listener; return () => { store.listener = () => {}; }; },
+    ...over,
   };
-  const readA = deferred();
-  const readB = deferred();
-  const reads: string[] = [];
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger(store.jobs),
-    cancel: async () => {},
-    steer: async () => true,
-    transcript: file => {
-      reads.push(file);
-      return file === fileA ? readA.promise : readB.promise;
-    },
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('\r');
-  const waitFor = async (predicate: () => boolean): Promise<void> => {
-    const deadline = Date.now() + 3_000;
-    while (!predicate()) {
-      assert.ok(Date.now() < deadline, 'the expected repaint happened');
-      await new Promise(resolve => setTimeout(resolve, 20));
+  const panel = agentsPanel(source, { terminal: { rows: height }, requestRender: () => { store.renders += 1; } } as any, theme, () => { store.closed += 1; });
+  return { panel, store, text: (width = 120) => panel.render(width).join('\n') };
+}
+
+test('tree order survives missing parents and malicious cycles', () => {
+  const a = job({ id: 'a' }); const b = job({ id: 'b', parentJobId: 'a' }); const c = job({ id: 'c', parentJobId: 'b' });
+  assert.deepEqual(rows({ v: 2, session: 's', jobs: [c, b, a] }).map(row => [row.job.id, row.depth]), [['a', 0], ['b', 1], ['c', 2]]);
+  assert.equal(rows({ v: 2, session: 's', jobs: [{ ...a, parentJobId: 'c' }, b, c] }).length, 3);
+});
+
+test('responsive views fit each supported terminal and a long Unicode task', t => {
+  for (const [width, height] of [[60, 20], [80, 24], [120, 40], [160, 50]]) {
+    const h = harness([job({ subject: '検証 👩🏽‍💻 é '.repeat(30) })], {}, height); t.after(() => h.panel.dispose());
+    for (const key of ['', '\t', '2', '3', 's']) {
+      if (key) h.panel.handleInput(key);
+      const lines = h.panel.render(width);
+      assert.ok(lines.length <= Math.floor(height * 0.9));
+      assert.ok(lines.every(line => visibleWidth(line) <= width), `${width}x${height}: ${lines.find(line => visibleWidth(line) > width)}`);
     }
-  };
-  await waitFor(() => reads.filter(file => file === fileA).length === 1);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b[B');
-  panel.handleInput('\r');
-  store.jobs = [a, { ...b, state: 'completed', settled: 10 }];
-  await waitFor(() => reads.filter(file => file === fileB).length === 1);
-
-  // Ada's abandoned read resolves after Omar owns the lock. It must not clear
-  // Omar's lock and allow a second, overlapping read to start.
-  readA.resolve([{ who: 'agent', text: 'stale Ada transcript' }]);
-  await new Promise(resolve => setTimeout(resolve, 650));
-  assert.equal(reads.filter(file => file === fileB).length, 1);
-  assert.doesNotMatch(panel.render(100).join('\n'), /stale Ada transcript/);
-
-  readB.resolve([{ who: 'agent', text: 'Omar final transcript' }]);
-  await waitFor(() => panel.render(100).join('\n').includes('Omar final transcript'));
-  await new Promise(resolve => setTimeout(resolve, 550));
-  assert.equal(reads.filter(file => file === fileB).length, 1, 'the final read stays final');
-  await rm(root, { recursive: true, force: true });
+  }
 });
 
-test('an unterminated bracketed paste stays bounded and never traps the editor', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-open-paste-'));
-  const file = join(root, 'child.jsonl');
-  await writeFile(file, 'x');
-  const live = job({ name: 'Omar', sessionFile: file });
-  const steered: string[] = [];
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger([live]),
-    cancel: async () => {},
-    steer: async (_id, message) => { steered.push(message); return true; },
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('\r');
-  panel.handleInput('\x1b[200~' + 'x'.repeat(1_000));
-  for (const _ of Array.from({ length: 100 })) panel.handleInput('y'.repeat(1_000));
-  assert.match(panel.render(100).join('\n'), /paste was too large/);
-  panel.handleInput('\x1b[201~');
-  panel.handleInput('\r');
-  assert.equal(steered[0]?.length, 240, 'the whole unterminated stream retained one bounded steer');
-  panel.handleInput('o');
-  panel.handleInput('k');
-  panel.handleInput('\r');
-  assert.equal(steered[1], 'ok', 'the forced boundary did not leave Input in paste mode');
-  await rm(root, { recursive: true, force: true });
+test('wide view shows tree and detail; narrow view switches without losing selection', t => {
+  const h = harness([job({ name: 'Ada' }), job({ name: 'Nadia', subject: 'Audit evidence' })]); t.after(() => h.panel.dispose());
+  h.panel.handleInput('j');
+  assert.match(h.text(), /Nadia worker/);
+  h.panel.handleInput('\t');
+  assert.match(h.text(60), /Audit evidence/);
+  h.panel.handleInput('\x1b');
+  assert.match(h.text(60), /›\s+Nadia/);
 });
 
-test('escape abandons an unterminated paste and returns to the job list', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-paste-escape-'));
-  const file = join(root, 'child.jsonl');
-  await writeFile(file, 'x');
-  const live = job({ name: 'Omar', sessionFile: file });
-  const steered: string[] = [];
-  const { tui: tt } = tui();
-  const panel = agentsPanel({
-    ledger: () => ledger([live]),
-    cancel: async () => {},
-    steer: async (_id, message) => { steered.push(message); return true; },
-  }, tt, theme, () => {});
-  t.after(() => panel.dispose());
-  panel.handleInput('\r');
-  panel.handleInput('\x1b[200~unfinished words');
-  panel.handleInput('\x1b');
-  assert.doesNotMatch(panel.render(100).join('\n'), /type to steer/, 'escape returned to the list');
-  panel.handleInput('\r');
-  panel.handleInput('o');
-  panel.handleInput('k');
-  panel.handleInput('\r');
-  assert.deepEqual(steered, ['ok'], 'the abandoned paste leaked nothing into the next takeover');
-  await rm(root, { recursive: true, force: true });
+test('blocked reports are attention, never green completed', t => {
+  const blocked = job({ state: 'completed', report: { outcome: 'blocked', summary: 'Need an API decision.', criteria: [], findings: [], blockers: ['Which endpoint?'] } });
+  assert.equal(statusOf(blocked).color, 'warning');
+  const h = harness([blocked]); t.after(() => h.panel.dispose());
+  assert.match(h.text(), /1 need attention/);
+  h.panel.handleInput('2');
+  assert.match(h.text(), /Which endpoint/);
+});
+
+test('filters, search and selection remain tied to IDs during changes', t => {
+  const a = job({ name: 'Ada', state: 'completed' }); const b = job({ name: 'Nadia' });
+  const h = harness([a, b]); t.after(() => h.panel.dispose());
+  h.panel.handleInput('f'); assert.match(h.text(), /Nadia worker/);
+  h.store.jobs = [job({ name: 'Zoe' }), b, a]; h.store.listener();
+  assert.match(h.text(), /Nadia worker/);
+  h.panel.handleInput('/'); h.panel.handleInput('Ada'); h.panel.handleInput('\r');
+  assert.match(h.text(), /No matching agents/);
+  h.panel.handleInput('\x1b'); h.panel.handleInput('f'); h.panel.handleInput('f');
+  assert.match(h.text(), /Ada/);
+});
+
+test('tree nodes fold without hiding unrelated agents', t => {
+  const a = job({ id: 'a', name: 'Ada' }); const b = job({ name: 'Nadia', parentJobId: 'a' });
+  const h = harness([a, b]); t.after(() => h.panel.dispose());
+  h.panel.handleInput('\x1b[D'); assert.doesNotMatch(h.text(), /Nadia/);
+  h.panel.handleInput('\x1b[C'); assert.match(h.text(), /Nadia/);
+});
+
+test('scrolling pauses follow and incoming activity does not move the viewport', t => {
+  const h = harness(); t.after(() => h.panel.dispose());
+  h.store.activity = Array.from({ length: 100 }, (_, i) => ({ id: String(i), at: i, kind: 'message', text: `entry ${i}` }));
+  h.panel.handleInput('1'); h.text(); h.panel.handleInput('\x1b[H');
+  const before = h.text(); assert.match(before, /entry 0/);
+  h.store.activity.push({ id: 'last', at: 100, kind: 'message', text: 'new arrival' }); h.store.listener();
+  assert.match(h.text(), /entry 0/); assert.doesNotMatch(h.text(), /new arrival/);
+  h.panel.handleInput('\x1b[F'); assert.match(h.text(), /new arrival/);
+});
+
+test('messages are multiline, preserve draft on failure, and never fire navigation commands', async t => {
+  const sends: string[] = [];
+  const h = harness(undefined, { steer: async (_id, text) => { sends.push(text); return sends.length > 1; } }); t.after(() => h.panel.dispose());
+  h.panel.handleInput('s'); h.panel.handleInput('x'); h.panel.handleInput('\r'); h.panel.handleInput('Please inspect the queue');
+  h.panel.handleInput('\x13'); await tick();
+  assert.deepEqual(sends, ['x\nPlease inspect the queue']); assert.deepEqual(h.store.stops, []);
+  assert.match(h.text(), /draft was kept/);
+  h.panel.handleInput('\x13'); await tick(); assert.equal(sends.length, 2); assert.match(h.text(), /Message delivered/);
+});
+
+test('escape retains a draft for the same agent and does not leak it to another', t => {
+  const h = harness([job({ name: 'Ada' }), job({ name: 'Nadia' })]); t.after(() => h.panel.dispose());
+  h.panel.handleInput('s'); h.panel.handleInput('Keep this draft'); h.panel.handleInput('\x1b'); h.panel.handleInput('\x1b');
+  h.panel.handleInput('j'); h.panel.handleInput('s'); assert.doesNotMatch(h.text(), /Keep this draft/);
+  h.panel.handleInput('\x1b'); h.panel.handleInput('\x1b'); h.panel.handleInput('k'); h.panel.handleInput('s'); assert.match(h.text(), /Keep this draft/);
+});
+
+test('oversized and unterminated pastes are bounded and rejected, never silently truncated', async t => {
+  const h = harness(); t.after(() => h.panel.dispose());
+  h.panel.handleInput('s'); h.panel.handleInput('\x1b[200~');
+  for (const _ of Array.from({ length: 100 })) h.panel.handleInput('x'.repeat(1000));
+  h.panel.handleInput('\x1b[201~'); h.panel.handleInput('\x13'); await tick();
+  assert.match(h.text(), /Paste rejected/); assert.deepEqual(h.store.steers, []);
+  h.panel.handleInput('\x1b[200~unfinished'); h.panel.handleInput('\x1b'); h.panel.handleInput('s');
+  h.panel.handleInput('ok'); h.panel.handleInput('\x13'); await tick(); assert.deepEqual(h.store.steers, ['ok']);
+});
+
+test('pasted controls are sanitized, newlines and Unicode are preserved', async t => {
+  const h = harness(); t.after(() => h.panel.dispose());
+  h.panel.handleInput('s'); h.panel.handleInput('\x1b[200~read\n👩🏽‍💻 \x1b[31mqueue\x07\x1b[201~'); h.panel.handleInput('\x13'); await tick();
+  assert.deepEqual(h.store.steers, ['read\n👩🏽‍💻 queue']);
+});
+
+test('resume selects the new execution and preserves the old report', async t => {
+  const a = job({ state: 'completed', name: 'Ada' }); const next = job({ name: 'Nadia' });
+  const h = harness([a], { resume: async () => { h.store.jobs.push(next); return next; } }); t.after(() => h.panel.dispose());
+  h.panel.handleInput('r'); h.panel.handleInput('Use the new endpoint'); h.panel.handleInput('\x13'); await tick();
+  assert.match(h.text(), /Nadia worker/); assert.equal(a.state, 'completed');
+});
+
+test('cancel goes through the common controller and cannot target a terminal job', async t => {
+  const a = job(); const h = harness([a]); t.after(() => h.panel.dispose());
+  h.panel.handleInput('x'); await tick(); assert.deepEqual(h.store.stops, [a.id]);
+  h.store.jobs = [{ ...a, state: 'completed' }]; h.panel.handleInput('x'); assert.equal(h.store.stops.length, 1);
+});
+
+test('history errors remain retryable, and disposal unsubscribes', async t => {
+  const a = job({ sessionFile: '/fake' }); const count = { value: 0 };
+  const h = harness([a], { transcript: async () => { if (++count.value === 1) throw new Error('busy'); return [{ who: 'agent', text: 'Recovered history' }]; } });
+  t.after(() => h.panel.dispose());
+  h.panel.handleInput('h'); await tick(); assert.match(h.text(), /History is unavailable/);
+  h.panel.handleInput('h'); await tick(); assert.match(h.text(), /Recovered history/);
+  h.panel.dispose(); const renders = h.store.renders; h.store.listener(); assert.equal(h.store.renders, renders);
+});
+
+test('empty state and help fit small terminals and escape returns before closing', t => {
+  const h = harness([], {}, 24); t.after(() => h.panel.dispose());
+  assert.match(h.text(), /Delegate a focused task/);
+  h.panel.handleInput('?'); assert.match(h.text(80), /NAVIGATION/);
+  h.panel.handleInput('\x1b'); assert.equal(h.store.closed, 0);
+  h.panel.handleInput('\x1b'); assert.equal(h.store.closed, 1);
+});
+
+test('64-job navigation and rendering stay under 100 ms per interaction', t => {
+  const h = harness(Array.from({ length: 64 }, (_, i) => job({ name: `Agent ${i}` }))); t.after(() => h.panel.dispose());
+  h.text();
+  const times = Array.from({ length: 30 }, () => { const start = performance.now(); h.panel.handleInput('j'); h.text(160); return performance.now() - start; });
+  assert.ok(Math.max(...times) < 100, `Slowest interaction ${Math.max(...times)}ms`);
 });

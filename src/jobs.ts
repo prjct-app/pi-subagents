@@ -1,8 +1,9 @@
 import {
   DEFAULT_LIMITS, admit, descendants, emptyLedger, expired, find, live, markDelivered,
-  noteSession, recover, remodel, running, settle, startable, starting, stopping, undelivered,
+  noteSession, noteQuestion, recover, remodel, running, settle, startable, starting, stopping, undelivered,
   type Admission, type Limits, type Request,
 } from './manager.ts';
+import { activityStore, type Activity, type ActivityInput } from './activity.ts';
 import type { Handle, Runner } from './runner.ts';
 import { isTerminal, type Job, type Ledger } from './schema.ts';
 
@@ -22,6 +23,7 @@ export type Wiring = {
   /** Called after every change, for whatever is drawing this. */
   onChange?: (ledger: Ledger) => void;
   limits?: Limits;
+  onActivity?: () => void;
 };
 
 export type Jobs = {
@@ -35,6 +37,11 @@ export type Jobs = {
   tick(): Promise<void>;
   /** What finished and has not been reported to the parent yet. Consumed once. */
   drain(): Job[];
+  pending(): Job[];
+  acknowledge(ids: readonly string[]): void;
+  question(jobId: string, text?: string): void;
+  activity(jobId: string): Activity[];
+  record(jobId: string, input: ActivityInput): void;
   /** Come back from a reload: nothing open survives, and nothing is replayed. */
   restore(saved: Ledger | undefined): Promise<void>;
   /** End everything, for a session that is going away. */
@@ -45,6 +52,7 @@ export type Jobs = {
 export function makeJobs(session: string, wiring: Wiring): Jobs {
   const limits = wiring.limits ?? DEFAULT_LIMITS;
   const store = { ledger: emptyLedger(session) };
+  const activity = activityStore(() => wiring.onActivity?.());
   /**
    * The live children, by job. A handle is stored as the promise of one so a
    * cancellation that arrives while a child is still starting has something to
@@ -53,8 +61,12 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
   const handles = new Map<string, Promise<Handle>>();
 
   const commit = (next: Ledger): Ledger => {
+    const previous = store.ledger;
     store.ledger = next;
-    void wiring.persist(next);
+    for (const job of next.jobs) {
+      if (find(previous, job.id)?.state !== job.state) activity.add(job.id, { kind: 'state', text: job.state });
+    }
+    try { void Promise.resolve(wiring.persist(next)).catch(() => undefined); } catch { /* Delivery separately persists each report before sending. */ }
     wiring.onChange?.(next);
     return next;
   };
@@ -63,11 +75,12 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
   const release = async (jobId: string, reason: string): Promise<void> => {
     const handle = handles.get(jobId);
     if (!handle) return;
-    handles.delete(jobId);
     // A start that failed leaves a rejected promise here, and awaiting it is how
     // that rejection would become the caller's problem. There is nothing to stop
     // in that case, which is the same outcome as having stopped it.
-    try { await (await handle).stop(reason); } catch { /* it never started */ }
+    const started = await handle.catch(() => undefined);
+    if (started) await started.stop(reason);
+    handles.delete(jobId);
   };
 
   /** Stop the children of jobs that are no longer live, and forget them. */
@@ -95,6 +108,7 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
 
   const heard = (jobId: string) => (event: Parameters<Parameters<Runner>[1]>[0]): void => {
     const now = wiring.now();
+    if (event.type === 'activity') { activity.add(jobId, event.activity); return; }
     if (event.type === 'running') {
       commit(running(store.ledger, jobId));
       return;
@@ -111,7 +125,7 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
       commit(settle(store.ledger, jobId, {
         kind: 'reported', report: event.report, ...(event.usage ? { usage: event.usage } : {}),
       }, now));
-      void after();
+      void after().catch(() => undefined);
       return;
     }
     if (event.type === 'failed') {
@@ -120,7 +134,7 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
       // abort must not relabel a timeout as "ended without reporting".
       if (current?.state === 'stopping') return;
       commit(settle(store.ledger, jobId, { kind: 'failed', reason: event.reason, ...(event.usage ? { usage: event.usage } : {}) }, now));
-      void after();
+      void after().catch(() => undefined);
     }
   };
 
@@ -131,7 +145,7 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
   };
 
   const pump = async (): Promise<void> => {
-    for (const job of startable(store.ledger, limits)) {
+    for (const job of startable(store.ledger, limits).slice(0, Math.max(0, limits.concurrency - handles.size))) {
       // Marked before anything is spawned, so a second pump cannot start the
       // same job twice while this one is waiting on a process.
       commit(starting(store.ledger, job.id, wiring.now()));
@@ -184,6 +198,14 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
       await after();
     },
 
+    pending: () => undelivered(store.ledger),
+    acknowledge(ids) { commit(markDelivered(store.ledger, ids, wiring.now())); },
+    question(jobId, text) {
+      commit(noteQuestion(store.ledger, jobId, text));
+      if (text) activity.add(jobId, { kind: 'question', text });
+    },
+    activity: activity.get,
+    record: activity.add,
     drain() {
       const ready = undelivered(store.ledger);
       if (ready.length === 0) return [];
@@ -198,7 +220,7 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
       // Whatever was open belonged to a process that is gone. It is recorded as
       // interrupted and never restarted: replaying work nobody watched is how a
       // crash turns into a bill.
-      commit(recover({ ...saved, session }, wiring.now()));
+      commit(recover({ ...saved, v: 2, session }, wiring.now()));
       await pump();
     },
 

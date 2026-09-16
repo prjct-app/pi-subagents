@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+- Replaced the agent list with a responsive two-pane TUI: search, filters, collapsible trees, activity/history scrolling, full evidence and execution details.
+- Added multiline steering with preserved drafts, explicit resume, visible pending actions and attention states for blocked work.
+- Added a native in-process runner behind an opt-in setting; processes remain the default.
+- Added startup capability checks, explicit child extension packages, read-only explorer/reviewer roles and the writable worker role.
+- Retry completion delivery after transient failures and deduplicate normal restored receipts.
+- Added layered configuration, separate concurrency/session budgets (64 runs by default), retained sessions, explicit continuation and seven-day owned-file cleanup.
+- Ledger v2 reads v1. Legacy child session files are never deleted automatically.
+- Added offline native-runner integration tests, TUI fixtures/benchmarks, CI and manual provenance publishing.
+
+## 0.1.0
 
 - Extracted the subagent runtime from pi-team into its own package:
   `agent_delegate` and `agent_jobs` tools (formerly `team_delegate` and

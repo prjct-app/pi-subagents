@@ -5,7 +5,7 @@ import { StringEnum } from '@earendil-works/pi-ai';
 import { Type } from 'typebox';
 import { randomUUID } from 'node:crypto';
 import {
-  ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
+  READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   ReportSchema, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkReport, reportProblems, type DelegateAnswer,
 } from './schema.ts';
 import { post, recent } from './wire.ts';
@@ -36,8 +36,9 @@ export default function subagentGuard(pi: ExtensionAPI): void {
  */
 const ASK_MS = 30_000;
 
-export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.env): boolean {
+export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.env, request?: (payload: string) => Promise<string | undefined>): boolean {
   if (env.PI_SUBAGENTS_CHILD !== '1') return false;
+  const askParent = (payload: string, ctx: any): Promise<string | undefined> => request ? request(payload) : ctx?.ui?.input?.(`${ASK_PREFIX}${payload}`, undefined, { timeout: ASK_MS });
   const mayDelegate = env.PI_SUBAGENTS_CAN_DELEGATE === '1';
 
   pi.registerTool({
@@ -83,7 +84,7 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
         // model here: a local “accepted” that the parent then refuses is worse
         // than a refusal, because the work is planned around a child that does
         // not exist.
-        const answered = await ctx?.ui?.input?.(`${ASK_PREFIX}${JSON.stringify({ kind: 'delegate', ...(input as object) })}`, undefined, { timeout: ASK_MS });
+        const answered = await askParent(JSON.stringify({ kind: 'delegate', ...(input as object) }), ctx);
         const answer = readAnswer(answered);
         return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
       },
@@ -110,7 +111,7 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
       const ask = input?.action === 'use'
         ? { kind: 'use_model', provider: String(input?.provider ?? ''), modelId: String(input?.modelId ?? '') }
         : { kind: 'models' };
-      const answered = await ctx?.ui?.input?.(`${ASK_PREFIX}${JSON.stringify(ask)}`, undefined, { timeout: ASK_MS });
+      const answered = await askParent(JSON.stringify(ask), ctx);
       const answer = readAnswer(answered);
       return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
     },
@@ -132,9 +133,7 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
       question: Type.String({ minLength: 1, maxLength: 2000 }),
     }),
     async execute(_toolCallId: string, input: any, _signal: unknown, _onUpdate: unknown, ctx: any) {
-      const answered = await ctx?.ui?.input?.(
-        `${ASK_PREFIX}${JSON.stringify({ kind: 'ask', question: String(input?.question ?? '') })}`,
-        undefined, { timeout: ASK_MS });
+      const answered = await askParent(JSON.stringify({ kind: 'ask', question: String(input?.question ?? '') }), ctx);
       const answer = readAnswer(answered);
       return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
     },
@@ -210,7 +209,19 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
   const bash = env.PI_SUBAGENTS_ALLOW_BASH === '1' && writer;
   // Enforce the opt-in again inside the child. `--tools` is the first gate;
   // this one also catches a stale job or a tool injected by another route.
-  const allowed = requested.filter(tool => tool !== 'bash' || bash);
+  const capabilities = env.PI_SUBAGENTS_ROLE === 'explorer' || env.PI_SUBAGENTS_ROLE === 'reviewer'
+    ? new Set([...READ_ONLY_TOOLS, ...CHILD_TOOLS, DELEGATE_TOOL, WIRE_SEND_TOOL, WIRE_INBOX_TOOL]) : undefined;
+  const allowed = requested.filter(tool => (tool !== 'bash' || bash) && (!capabilities || capabilities.has(tool)));
+  if (env.PI_SUBAGENTS_VERIFY_TOOLS === '1') pi.on('session_start', (_event, ctx) => {
+    const available = new Set(pi.getAllTools().map(tool => tool.name));
+    ctx.ui.notify(`${READY_PREFIX}${JSON.stringify({ missing: allowed.filter(tool => !available.has(tool)) })}`, 'info');
+  });
+  if (env.PI_SUBAGENTS_VERIFY_TOOLS === '1') pi.on('before_agent_start', () => {
+    const available = new Set(pi.getAllTools().map(tool => tool.name));
+    const missing = allowed.filter(tool => !available.has(tool));
+    if (missing.length) throw new Error(`Child capabilities unavailable: ${missing.join(', ')}. Configure extensionPackages explicitly.`);
+    pi.setActiveTools(allowed);
+  });
   pi.on('tool_call', (event: any, ctx: any) => {
     const tool = String(event?.toolName ?? '');
     if (!allowed.includes(tool)) {

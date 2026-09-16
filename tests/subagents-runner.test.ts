@@ -266,7 +266,7 @@ test('an accepted report ends the run, priced, without waiting for the last word
   // Nothing waits for an `agent_settled` that would only cost another answer:
   // a child that has reported has nothing left to do.
   assert.equal(child.sent.some((message: any) => message.type === 'get_session_stats'), true);
-  assert.deepEqual(events.map(event => event.type), ['running', 'session', 'report', 'settled']);
+  assert.deepEqual(events.filter(event => event.type !== 'activity').map(event => event.type), ['running', 'session', 'report', 'settled']);
 });
 
 test('a report its own guard rejected is not forwarded, and the child keeps going', async () => {
@@ -568,4 +568,13 @@ test('the child says where its transcript lives, and the job carries it', async 
   await until('it is running', () => run.events.some(event => event.type === 'running'));
   assert.ok(run.events.some(event => event.type === 'session' && event.file === '/fake/session.jsonl'),
     'best-effort, once the task is accepted');
+});
+
+test('observed usage lets a report settle without waiting for the RPC statistics timeout', async () => {
+  const { child, ended } = await started({}, live);
+  child.say({ type: 'message_end', message: { role: 'assistant', usage: { totalTokens: 42, cost: { total: 0.001 } } } });
+  child.report({ outcome: 'completed', summary: 'Done' });
+  await until('report settles', () => ended() !== undefined);
+  assert.deepEqual((ended() as any).usage, { tokens: 42, cost: 0.001, calls: 1 });
+  assert.equal(child.sent.some((message: any) => message.type === 'get_session_stats'), false);
 });

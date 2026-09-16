@@ -1,66 +1,173 @@
 # pi-subagents
 
-Subagents for PI Agent: expert child processes that work beside your session
-and report back with evidence. Each one is its own `pi` process — its file
-tools fenced to a directory, armed with selected active tools from your session,
-on a model it chooses for itself — and it is gone when it reports.
-
-No team, no alias, no mailbox required. When
-[pi-team](https://github.com/prjct-app/pi-team) is installed beside this
-package, a job started inside a team task is filed under that task's thread;
-without it, jobs belong to the session that started them.
-
-## Install
+Focused delegation for Pi, with a live two-pane terminal workspace, evidence-based
+reports and explicit continuation. No external service, scheduler or team setup.
 
 ```bash
 pi install npm:@prjct.app/pi-subagents
 ```
 
-## What you get
+Requires Pi **0.85.1–0.85.x** and Node **22.19+**. The default runner launches a
+child Pi process for each active job; a native in-process runner is opt-in.
 
-- **Auto-delegation** — off by default. With `/agents auto on` (or
-  `PI_AGENTS_AUTO=1`), a complex typed prompt is triaged by the cheapest model
-  you have — beside the turn, never blocking it — and becomes up to three
-  expert subagents while your session is told who is reading what. Questions,
-  single-file changes and one-lookup tasks are never split.
-- **`agent_delegate`** (tool) — start a subagent on one separable piece of
-  work, explicitly. Same machinery, your call instead of the triage's.
-- **`agent_jobs`** (tool) — review the subagents this session started, or stop
-  one. **`agent_reply`** (tool) — answer a question one escalated to you.
-- **`/agents`** (command) — a live panel over the ledger: the tree, each job's
-  state in color, model, elapsed and cost; `enter` unfolds a report, `x` stops
-  a job and everything under it, `esc` closes.
+## Watch and control work
 
-## What a subagent is
+Open **`/agents`**. Wide terminals show the agent tree beside the selected job;
+terminals below 100 panel columns switch between the two views. Activity, full
+reports and execution details have independent purposes: see what is happening,
+check the evidence, then inspect capabilities and limits.
 
-A first-class citizen with one task. It inherits the session's *active* tools.
-Built-in file tools are fenced to the directory it was given; in plan mode that
-set is read-only, while an ordinary writable session can pass edit and write. Bash is disabled by default
-and never presented as a read-only shell or a filesystem sandbox. It chooses
-its own model from the machine's catalogue,
-presented as facts, never as advice. It can ask for a subagent of its own
-(depth 2, one budget and one clock per tree), message its siblings over the
-tree's wire, and ask its parent — or its grandparent, up to your session —
-when a decision is not its own. A session that ends takes every job it owns
-with it.
+- Search by name, task or job ID; filter All, Active or Attention.
+- Fold delegation trees, scroll activity and inspect tool output.
+- Read all reported criteria, findings and blockers. Blocked reports are marked
+  **Needs attention**, even when their execution has finished.
+- Send multiline instructions without losing your draft after a failed send.
+- Continue a retained conversation as a new execution, preserving previous reports.
+- Keep the parent chat readable: one compact summary replaces per-agent widget rows.
 
-## Environment
+| Key | Action |
+| --- | --- |
+| `↑` / `↓`, `j` / `k` | Select an agent or scroll the focused detail |
+| `Tab` | Switch tree / detail |
+| `←` / `→` | Fold / unfold a tree |
+| `1` / `2` / `3` | Activity / Result / Details |
+| `/` | Search |
+| `f` | Cycle All / Active / Attention |
+| `PgUp` / `PgDn`, `Home` | Browse activity; PgUp at the top loads older history |
+| `End` | Follow the latest activity |
+| `h` | Open retained history |
+| `t` | Expand / collapse tool details |
+| `s` | Message a live agent |
+| `r` | Continue a finished agent |
+| `x` | Stop an agent and its descendants |
+| `?` | Keyboard help |
+| `Esc` | Keep draft / go back / close |
 
-- `PI_AGENTS_AUTO` — `1` turns auto-delegation on for every session.
-- `PI_SUBAGENTS_PI_COMMAND` — how to launch `pi`, when the default (the same
-  build this session runs on) does not fit the host.
-- `PI_SUBAGENTS_ALLOW_BASH` — `1` lets children that inherited `edit` or
-  `write` inherit Bash too. **This is an unrestricted capability, not a
-  sandbox.** The child starts in its assigned directory, but Bash can access
-  anything available to your operating-system account: files outside that
-  directory, credentials, the network, and other processes. Leave it unset
-  unless that reach is intentional; use an operating-system sandbox when you
-  need isolation.
+In the message editor, `Enter` inserts a newline; `Ctrl+Enter` or `Ctrl+S` sends.
+The limit is 4,000 characters. Oversized pastes are rejected with a visible notice,
+not silently shortened. Standard Pi themes and Unicode editing are preserved.
 
-## Development
+## Three tools
+
+- **`agent_delegate`**: `role`, `subject`, `task`, optional `context`, `model`, `cwd`.
+- **`agent_jobs`**: `action: status | result | cancel | steer | resume`, optional
+  `jobId` and `message` (required for steer/resume). `result` returns the full report.
+- **`agent_reply`**: `name`, `answer`; answer a question escalated by a live child.
+
+Jobs return immediately; results arrive in the parent session. Delivery failures
+are retried, including while idle, and receipt IDs prevent duplicate delivery on
+normal session restoration. Pi does not provide transactional send-and-ack, so a
+crash between acceptance and persistence can still cause a duplicate notification.
+
+## Roles and capabilities
+
+**`explorer`** maps code and **`reviewer`** checks evidence. Both only inherit active
+`read`, `grep`, `find` and `ls` tools. **`worker`** may inherit active mutation tools.
+A read-only parent cannot grant a worker edit/write permissions it does not have.
+Grandchildren cannot expand their parent's capability set.
+
+Built-in file tools are fenced to the assigned directory, including symlink
+resolution. Bash is disabled unless `PI_SUBAGENTS_ALLOW_BASH=1` and the worker
+inherits edit or write. **Bash is unrestricted, not a filesystem sandbox.**
+Extension tools have their own semantics; loading their code is a trusted action,
+and this package does not sandbox arbitrary extension code.
+
+Children load only the package guard and explicitly configured extension packages.
+Ambient extensions, skills and prompt templates are disabled. The process runner
+checks the guard's capability handshake before sending the task; the native runner
+checks the SDK tool registry. Unavailable tools/models fail explicitly.
+
+A child starts on the requested or inherited model and may choose another from the
+parent's catalogue. A missing provider extension must be explicitly enabled; there
+is no silent model substitution. Children can delegate within the shared tree
+limits, coordinate over a bounded wire, and escalate questions to their parent.
+
+## Configuration
+
+Optional files: `<Pi agent directory>/prjct-subagents.json` and
+`<project>/.pi/prjct-subagents.json`. Project fields override global fields;
+invalid fields warn and retain the previous valid value. Changes take effect when
+the parent session starts again.
+
+```json
+{
+  "runner": "process",
+  "retentionDays": 7,
+  "extensionPackages": [],
+  "limits": {
+    "concurrency": 2,
+    "jobs": 64,
+    "timeoutMs": 300000,
+    "depth": 2,
+    "descendants": 4,
+    "taskBytes": 24576
+  }
+}
+```
+
+`jobs` is a cumulative per-parent-session budget, including continuations;
+completed jobs do not refund it. Concurrency is a separate live capacity limit.
+The clock covers the entire tree from admission, including queued time.
+Supported maxima are 16 concurrent jobs, 256 session runs, depth 8, 64 descendants,
+24 hours per tree and 48 KiB of task plus context. Retention accepts 1–365 days.
+
+`extensionPackages` names already-installed npm packages with explicit
+`pi.extensions` entries. Packages are resolved from the project and Pi agent/npm
+directories; nothing is downloaded automatically. Read-only roles do not gain
+arbitrary extension tools by enabling a package.
+
+Set `runner` to **`in-process`** to use native Pi sessions. The same lifecycle,
+reports, role restrictions and retention apply. This mode shares the host process:
+uncooperative extension code can affect Pi itself. A child that does not acknowledge
+cancellation keeps its capacity reserved. Process execution remains the default;
+there is no automatic switch between runners.
+
+Environment variables remain supported:
+
+- `PI_AGENTS_AUTO=1`: opt into automatic triage of complex typed prompts. Default
+  off; toggle per session with `/agents auto on|off`. Automatic roles remain readers.
+- `PI_SUBAGENTS_ALLOW_BASH=1`: enable unrestricted Bash for writable workers.
+- `PI_SUBAGENTS_PI_COMMAND`: override child Pi invocation for the process runner.
+- `PI_CODING_AGENT_DIR`: Pi agent home, also used for configuration and storage.
+
+## History and recovery
+
+New child sessions and coordination files live under
+`<Pi agent directory>/prjct-subagents/`, partitioned by parent session. The default
+retention is seven days from completion. Startup cleanup removes expired owned
+jobs, skips live owners and symlink directories, and never deletes legacy external
+session files. Parent reports remain in the parent session.
+
+Resume explicitly forks the retained conversation into a new execution with a new
+ID, a new clock and the intersection of the previous and current permissions. Only
+one active continuation per source session is admitted. Reports from previous runs
+are preserved; the previous job links to its continuation. Expired or unavailable
+history requires a fresh delegation. Restoring the parent marks unfinished work
+interrupted; it never automatically repeats a model call.
+
+Ledger v1 remains readable and is upgraded to v2 on restoration. Existing tool
+names and the optional `pi-team` integration remain compatible. Compared with 0.1,
+**use `worker` for edits**; explorer/reviewer no longer inherit write tools.
+
+## Development and release
 
 ```bash
-npm install
-npm run check   # tsc --noEmit + no `let` under src/
-npm test        # node --import tsx --test tests/*.test.ts tests/*.test.mjs
+npm ci
+npm run check
+npm test
+npm run check:package
+npm run demo:tui       # interactive, offline fixture
+npm run preview:tui    # build/tui-preview.html, exact component renders
+npm run benchmark     # offline native/process timing and memory observations
 ```
+
+Tests include native Pi runs against a local deterministic provider. They require
+no API credentials or external model calls. The preview is a visual rendering of
+the component output; the interactive demo runs it in a real terminal.
+
+CI runs the checks on Linux and macOS with Node 22/24. Release publishing is a
+separate manual workflow. Configure the npm package's GitHub trusted publisher
+for `prjct-app/pi-subagents`, workflow `publish.yml`, then dispatch it on a matching
+`vX.Y.Z` tag. It verifies the version, runs checks, and publishes with provenance.
+No long-lived npm token is stored in the workflow. See
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for registry setup.

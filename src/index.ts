@@ -1,3 +1,7 @@
+import { defaultSettings, loadSettings, roleTools, extensionPaths, agentHome } from './config.ts';
+import { cleanupStorage, storageRoot, sessionRoot, prepareSession, retainSettlement, resumable } from './storage.ts';
+import { inProcessRunner } from './in-process.ts';
+import type { Activity } from './activity.ts';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
@@ -7,15 +11,13 @@ import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
 import { DEFAULT_LIMITS, find, live, undelivered, unresolved } from './manager.ts';
-import { jobLine, jobView, ledgerLines, ledgerView, resultContent, seconds, spent, themedJobLine } from './render.ts';
+import { needsAttention, jobView, ledgerLines, ledgerView, resultContent, themedJobLine } from './render.ts';
 import { getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
 import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
-import { selectChildTools, spawnRunner } from './runner.ts';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger } from './schema.ts';
+import { spawnRunner } from './runner.ts';
+import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger, type Role } from './schema.ts';
 
 /**
  * pi-subagents: ephemeral subagents a session delegates to, usable on their
@@ -63,13 +65,24 @@ export type JobsHandle = {
   cancel: (jobId: string, reason: string) => Promise<void>;
   /** Words for a live child, from a person at the panel. */
   steer: (jobId: string, message: string) => Promise<boolean>;
+  resume?: (jobId: string, message: string) => Promise<Job>;
+  activity?: (jobId: string) => Activity[];
+  subscribe?: (listener: () => void) => () => void;
+  limits?: () => typeof DEFAULT_LIMITS;
 };
 
 export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHandle {
   // pi-team registers a provider through the registry when a team task can be
   // open; an explicit option still wins, which is how tests stay hermetic.
   const activeRoot = options.activeRoot ?? getActiveRoot;
+  const listeners = new Set<() => void>();
+  const notify = (): void => { for (const listener of listeners) listener(); };
+  const inFlight = new Map<string, number>();
+  const recorded = new Set<string>();
+  const retained = new Set<string>();
   const state = {
+    settings: defaultSettings(),
+    delivering: false,
     ctx: undefined as ExtensionContext | undefined,
     jobs: undefined as Jobs | undefined,
     running: false,
@@ -107,10 +120,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
    * separate, explicit capability: it is inherited only by a writable child
    * when the operator opted in, and it is never described as a sandbox.
    */
-  const inheritedTools = (): string[] => {
+  const inheritedTools = (role: Role): string[] => {
     try {
       const active = pi.getActiveTools().filter(name => name !== 'agent_delegate' && name !== 'agent_jobs');
-      return selectChildTools(active, process.env.PI_SUBAGENTS_ALLOW_BASH === '1');
+      return roleTools(role, active);
     } catch {
       return [...READ_ONLY_TOOLS];
     }
@@ -136,26 +149,38 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const deliver = (): void => {
     const context = state.ctx;
     const jobs = state.jobs;
-    if (!context || !jobs) return;
+    if (!context || !jobs || state.closed || state.delivering) return;
     // Idle and running are the two states Pi accepts a message in. Anything
     // else — compaction, most of all — waits for the next tick.
     const idle = context.isIdle();
     if (!idle && !state.running) return;
-    const done = jobs.drain();
+    const confirmed = new Set<string>((context.sessionManager.getBranch() as any[]).flatMap(entry =>
+      entry.type === 'custom_message' && entry.customType === 'agent-job-result' ? entry.details?.deliveryIds ?? [] : []));
+    const receipts = jobs.pending().filter(job => confirmed.has(job.id)).map(job => job.id);
+    if (receipts.length) { for (const id of receipts) inFlight.delete(id); jobs.acknowledge(receipts); }
+    const done = jobs.pending().filter(job => {
+      const attempt = inFlight.get(job.id);
+      return attempt === undefined || (idle && !context.hasPendingMessages?.() && Date.now() - attempt >= (options.tickMs ?? TICK_MS));
+    });
     if (done.length === 0) return;
-    // The unabridged form goes to the transcript first, which is free. It is
-    // also what survives a send that Pi will not take — during a compaction
-    // that started between the check above and this line — so a report is never
-    // lost, only late: the ledger still holds it and `/agents` still shows it.
-    for (const job of done) pi.appendEntry('agent-job', job);
+    state.delivering = true;
     try {
+      for (const job of done) {
+        if (recorded.has(job.id)) continue;
+        pi.appendEntry('agent-job', job);
+        recorded.add(job.id);
+      }
+      for (const job of done) inFlight.set(job.id, Date.now());
       pi.sendMessage(
-        { customType: 'agent-job-result', display: true, details: { jobs: done }, content: resultContent(done) },
+        { customType: 'agent-job-result', display: true, details: { jobs: done, deliveryIds: done.map(job => job.id) }, content: resultContent(done) },
         idle ? { triggerTurn: true, deliverAs: 'followUp' } : { deliverAs: 'steer' },
       );
+      // ExtensionAPI.sendMessage is fire-and-forget. Only a message event or a
+      // persisted receipt proves delivery; returning from this call does not.
     } catch {
-      state.ctx?.ui?.notify?.(`${done.length} delegated job${done.length === 1 ? '' : 's'} finished; see /agents.`, 'warning');
-    }
+      for (const job of done) inFlight.delete(job.id);
+      startTicking();
+    } finally { state.delivering = false; }
   };
 
   const stopTicking = (): void => {
@@ -169,11 +194,11 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     if (!jobs) return;
     showWidget();
     void jobs.tick().then(deliver).catch(() => undefined);
-    if (live(jobs.ledger()).length === 0) stopTicking();
+    if (live(jobs.ledger()).length === 0 && jobs.pending().length === 0) stopTicking();
   };
 
   const startTicking = (): void => {
-    if (state.timer) return;
+    if (state.timer || state.closed) return;
     state.timer = setInterval(tick, options.tickMs ?? TICK_MS);
     // A pending timer must never be the reason a session cannot exit.
     state.timer.unref?.();
@@ -189,7 +214,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       role: ask.role, subject: ask.subject, task: ask.task, context: ask.context,
       // A grandchild inherits what its parent was given, never more — tools,
       // and the wire: the whole tree talks on one file.
-      ...(parent.tools ? { tools: parent.tools } : {}),
+      tools: roleTools(ask.role, parent.tools ?? READ_ONLY_TOOLS), runner: state.settings.runner,
       ...(parent.wire ? { wire: parent.wire } : {}),
       ...model, cwd: parent.cwd, depth: parent.depth + 1, parentJobId: parent.id,
       ...(parent.rootId ? { rootId: parent.rootId } : {}),
@@ -211,9 +236,12 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const showWidget = (): void => {
     const context = state.ctx;
     if (!context || !context.hasUI) return;
-    const active = (state.jobs?.ledger().jobs ?? []).filter(job => !isTerminal(job.state));
-    const text = active.length
-      ? `agents: ${active.map(job => `${plain(job.name)} ${job.state} ${seconds(job)}${spent(job)}`).join(' · ')} · /agents`
+    const all = state.jobs?.ledger().jobs ?? [];
+    const active = all.filter(job => !isTerminal(job.state) && job.state !== 'queued');
+    const queued = all.filter(job => job.state === 'queued');
+    const attention = all.filter(needsAttention);
+    const text = active.length || queued.length || attention.length
+      ? `Agents  ${active.length} active · ${queued.length} queued · ${attention.length} need attention · ${all.length}/${state.settings.limits.jobs} runs · /agents`
       : undefined;
     if (text === state.widget) return;
     state.widget = text;
@@ -260,7 +288,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       const decision = await jobs.delegate({
         role: subtask.role, subject: subtask.subject, task: subtask.task,
         context: `The person asked the session you are assisting:\n${prompt.slice(0, 800)}`,
-        ...model, cwd: context.cwd, depth: 0, tools: inheritedTools(), key,
+        ...model, cwd: context.cwd, depth: 0, tools: inheritedTools(subtask.role), runner: state.settings.runner, key,
         ...(rootId ? { rootId } : {}),
       });
       if (decision.ok && !decision.repeated) launched.push(decision.job);
@@ -288,6 +316,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const onAsk = async (job: Job, question: string): Promise<DelegateAnswer> => {
     const jobs = state.jobs;
     if (!jobs) return { ok: false, text: 'The question could not be sent. Report what blocks you instead.' };
+    jobs.question(job.id, question);
     const parent = job.parentJobId ? find(jobs.ledger(), job.parentJobId) : undefined;
     if (parent && !isTerminal(parent.state)) {
       const sent = await jobs.steerTo(parent.id,
@@ -311,23 +340,61 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     return { ok: false, text: 'There is no one to ask right now. Report what blocks you instead.' };
   };
 
-  const build = (session: string): Jobs => makeJobs(session, {
-    runner: (options.makeRunner ?? spawnRunner)({
-      guardPath: GUARD, depth: DEFAULT_LIMITS.depth, onDelegate, onAsk, catalogue: () => state.choices,
-      wireRoot: options.wireRoot ?? join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent'), 'agents'),
-    }),
-    now: () => Date.now(),
-    persist: ledger => { try { pi.appendEntry('agent-jobs', ledger); } catch { /* the session is closing */ } },
-    onChange: ledger => {
-      if (live(ledger).length > 0) startTicking();
-      showWidget();
-      // A job that ends mid-turn is handed over at once rather than waiting for
-      // a tick. Queued, not called: this runs inside the change it is reacting
-      // to, and handing over is itself a change. The second pass finds nothing
-      // left to deliver and stops.
-      if (undelivered(ledger).length > 0) queueMicrotask(deliver);
-    },
-  });
+  const build = (session: string): Jobs => {
+    const directory = sessionRoot(session);
+    const runnerOptions = {
+      guardPath: GUARD, verifyCapabilities: true, depth: state.settings.limits.depth, onDelegate, onAsk, catalogue: () => state.choices,
+      wireRoot: options.wireRoot ?? directory,
+      extensionPaths: extensionPaths(state.settings.extensionPackages, ctx().cwd),
+      prepare: (job: Job) => prepareSession(job, directory),
+    };
+    const factory = options.makeRunner ?? (state.settings.runner === 'in-process' ? inProcessRunner : spawnRunner);
+    return makeJobs(session, {
+      runner: factory(runnerOptions), limits: state.settings.limits,
+      now: () => Date.now(),
+      persist: ledger => pi.appendEntry('agent-jobs', ledger),
+      onActivity: notify,
+      onChange: ledger => {
+        if (live(ledger).length > 0 || undelivered(ledger).length > 0) startTicking();
+        for (const job of (options.makeRunner ? [] : ledger.jobs).filter(job => isTerminal(job.state) && !retained.has(job.id))) {
+          retained.add(job.id);
+          void retainSettlement(job, directory).catch(() => retained.delete(job.id));
+        }
+        showWidget();
+        notify();
+        if (undelivered(ledger).length > 0) queueMicrotask(deliver);
+      },
+    });
+  };
+
+  const steerJob = async (jobId: string, message: string): Promise<boolean> => {
+    if (!message.trim() || message.length > 4000) throw new Error('Send between 1 and 4,000 characters.');
+    const sent = await state.jobs?.steerTo(jobId, message) ?? false;
+    if (sent) {
+      state.jobs?.question(jobId, undefined);
+      state.jobs?.record(jobId, { kind: 'message', text: `You: ${message}` });
+    }
+    return sent;
+  };
+  const resumeJob = async (jobId: string, message: string, key?: string): Promise<Job> => {
+    const jobs = state.jobs;
+    const original = jobs && find(jobs.ledger(), jobId);
+    if (!jobs || !original) throw new Error('Unknown job in this session.');
+    if (key) { const previous = jobs.ledger().jobs.find(job => job.key === key); if (previous) return previous; }
+    if (!message.trim() || message.length > 4000) throw new Error('Send between 1 and 4,000 characters.');
+    const sessionFile = await resumable(original, state.settings.retentionDays);
+    const allowed = inheritedTools(original.role).filter(tool => ([...original.tools ?? READ_ONLY_TOOLS] as readonly string[]).includes(tool));
+    const dir = resolveWorkDir(ctx().cwd, original.cwd);
+    if ('refused' in dir) throw new Error(dir.refused);
+    const model = resolve(`${original.provider}/${original.modelId}`);
+    if ('refused' in model) throw new Error(model.refused);
+    const result = await jobs.delegate({ role: original.role, subject: original.subject, task: message,
+      context: 'Continue the retained conversation. Previous reports are historical; return a new report for this request.',
+      ...model, cwd: dir.cwd, tools: allowed, depth: 0, key, rootId: original.rootId,
+      resumedFrom: original.id, resumeSession: sessionFile, runner: state.settings.runner });
+    if (!result.ok) throw new Error(result.reason);
+    return result.job;
+  };
 
   pi.registerEntryRenderer('agent-jobs', () => new Container());
   pi.registerEntryRenderer<Job>('agent-job', (entry, { expanded }, theme) => jobView(entry.data, expanded, theme));
@@ -347,7 +414,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       name: 'agent_delegate',
       label: 'Delegate a job',
       description: 'Start a subagent on one separable piece of work. It derives its own acceptance '
-        + 'criteria, returns evidence, and ends. It inherits this session\'s active tools; built-in file '
+        + 'criteria, returns evidence, and ends. Explorer and reviewer are read-only; worker may inherit active write tools. Built-in file '
         + 'tools are fenced to cwd. Bash is excluded unless PI_SUBAGENTS_ALLOW_BASH=1 and the child is writable; '
         + 'when enabled it is unrestricted, not sandboxed. It runs beside you: do not wait for it, '
         + `and do not delegate what you could finish in the time this costs. ${hint}`,
@@ -371,7 +438,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         const rootId = activeRoot();
         const decision = await jobs.delegate({
           role: input.role, subject: input.subject, task: input.task, context: input.context,
-          ...model, cwd: dir.cwd, depth: 0, tools: inheritedTools(),
+          ...model, cwd: dir.cwd, depth: 0, tools: inheritedTools(input.role), runner: state.settings.runner,
           // The same call twice admits one job, not a second identical child.
           key: toolCallId,
           ...(rootId ? { rootId } : {}),
@@ -404,14 +471,27 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     label: 'Delegated jobs',
     description: 'Review the subagents this session started, or stop one. A job that came back '
       + 'blocked is unresolved work you own: this is where to see what is still open before calling '
-      + 'anything finished.',
+      + 'anything finished. Use result for full evidence, steer with a message to guide a live job, or resume with a message to continue a retained conversation.',
     parameters: Type.Object({
-      action: StringEnum(['status', 'cancel'] as const),
+      action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume'] as const),
       jobId: Type.Optional(Type.String({ maxLength: 128 })),
+      message: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
     }),
     async execute(_toolCallId: string, input: any) {
       const jobs = state.jobs;
       if (!jobs) throw new Error('This session has not delegated anything.');
+      if (['result', 'steer', 'resume'].includes(input.action)) {
+        const job = input.jobId ? find(jobs.ledger(), input.jobId) : undefined;
+        if (!job) throw new Error('Give the id of a job this session started.');
+        if (input.action === 'result') return { content: [{ type: 'text' as const, text: JSON.stringify(job.report ?? { state: job.state, reason: job.reason }) }], details: job };
+        if (typeof input.message !== 'string') throw new Error('A message is required.');
+        if (input.action === 'resume') {
+          const resumed = await resumeJob(job.id, input.message, _toolCallId);
+          return { content: [{ type: 'text' as const, text: `Resumed as ${resumed.name} (${resumed.id}).` }], details: resumed };
+        }
+        if (!await steerJob(job.id, input.message)) throw new Error('This job is not reachable; inspect its result or resume it.');
+        return { content: [{ type: 'text' as const, text: `Message delivered to ${job.name}.` }], details: job };
+      }
       if (input.action === 'cancel') {
         const job = input.jobId ? find(jobs.ledger(), input.jobId) : undefined;
         if (!job) throw new Error('Give the id of a job this session started.');
@@ -454,7 +534,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       if (!jobs || !job) {
         throw new Error(`No live subagent named "${input.name}". If it already reported, its report has what it knew.`);
       }
-      const sent = await jobs.steerTo(job.id, `The session that launched you answers: ${input.answer}`);
+      const sent = await steerJob(job.id, `The session that launched you answers: ${input.answer}`);
       if (!sent) throw new Error(`${input.name} is not reachable any more. Its report stands on its own.`);
       return { content: [{ type: 'text' as const, text: `Answered ${input.name}. Carry on with your own work.` }], details: { name: input.name } };
     },
@@ -496,6 +576,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     state.ctx = context;
     state.closed = false;
     state.widget = undefined;
+    state.settings = options.makeRunner ? defaultSettings() : loadSettings(context.cwd, agentHome(), text => context.ui.notify(text, 'warning'));
+    inFlight.clear();
+    recorded.clear();
+    retained.clear();
+    for (const entry of context.sessionManager.getBranch() as any[]) {
+      if (entry.type === 'custom' && entry.customType === 'agent-job' && entry.data?.id) recorded.add(entry.data.id);
+    }
+    if (!options.makeRunner) void cleanupStorage(storageRoot(), state.settings.retentionDays).catch(() => undefined);
     // The toggle survives a reload as a session entry, like the ledger does.
     const pref = context.sessionManager.getBranch()
       .filter((entry: any) => entry.type === 'custom' && entry.customType === 'agents-auto').at(-1) as any;
@@ -511,8 +599,17 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       .filter((entry: any) => entry.type === 'custom' && entry.customType === 'agent-jobs').at(-1) as any;
     const data = saved?.data;
     if (!checkLedger(data) || data.session !== context.sessionManager.getSessionId()) return;
-    await jobs.restore(data as Ledger);
+    const receipts = new Set<string>((context.sessionManager.getBranch() as any[]).flatMap(entry =>
+      entry.type === 'custom_message' && entry.customType === 'agent-job-result' ? entry.details?.deliveryIds ?? [] : []));
+    await jobs.restore({ ...(data as Ledger), jobs: (data as Ledger).jobs.map(job => receipts.has(job.id) ? { ...job, delivered: job.delivered ?? Date.now() } : job) });
     deliver();
+  });
+
+  pi.on('message_end', (event: any) => {
+    const message = event.message;
+    if (message?.customType !== 'agent-job-result' || !Array.isArray(message.details?.deliveryIds)) return;
+    const ids = message.details.deliveryIds.filter((id: unknown) => typeof id === 'string' && state.jobs?.pending().some(job => job.id === id));
+    if (ids.length) { for (const id of ids) inFlight.delete(id); state.jobs?.acknowledge(ids); }
   });
 
   pi.on('agent_start', () => { state.running = true; });
@@ -539,7 +636,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     lines: () => ledgerLines(state.jobs?.ledger()),
     ledger: () => state.jobs?.ledger(),
     cancel: async (jobId, reason) => { await state.jobs?.cancel(jobId, reason); },
-    steer: async (jobId, message) => await state.jobs?.steerTo(jobId, message) ?? false,
+    steer: steerJob, resume: resumeJob,
+    activity: jobId => state.jobs?.activity(jobId) ?? [],
+    subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    limits: () => state.settings.limits,
   };
   pi.registerCommand('agents', {
     description: 'Watch and control the subagents this session delegated; /agents auto on|off toggles auto-delegation',

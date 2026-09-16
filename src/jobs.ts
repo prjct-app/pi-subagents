@@ -59,6 +59,8 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
    * wait for instead of finding nothing and leaving the process behind.
    */
   const handles = new Map<string, Promise<Handle>>();
+  /** Best-effort deadline nudges are sent once per stage, never on every tick. */
+  const deadlineNudges = new Set<string>();
 
   const commit = (next: Ledger): Ledger => {
     const previous = store.ledger;
@@ -189,8 +191,23 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
     },
 
     async tick() {
+      const now = wiring.now();
+      for (const job of live(store.ledger).filter(item => !item.parentJobId && item.state === 'running')) {
+        const elapsed = now - job.admitted;
+        const ratio = elapsed / limits.timeoutMs;
+        const stage = ratio >= 0.85 && ratio < 1 ? 'final' : ratio >= 0.6 && ratio < 1 ? 'narrow' : undefined;
+        const key = stage ? `${job.id}:${stage}` : undefined;
+        if (!stage || !key || deadlineNudges.has(key)) continue;
+        deadlineNudges.add(key);
+        const remaining = Math.max(1, Math.ceil((limits.timeoutMs - elapsed) / 1000));
+        const message = stage === 'final'
+          ? `Deadline imminent: about ${remaining}s remain. Stop optional exploration now and call subagent_report with your best evidence. A partial report or explicit blocker is preferable to a timeout.`
+          : `Time budget: about ${remaining}s remain. Narrow the scope to the requested outcome. If anything blocks completion, report the blocker instead of continuing optional exploration.`;
+        const handle = handles.get(job.id);
+        if (handle) await handle.then(value => value.steer?.(message), () => undefined).catch(() => undefined);
+      }
       const reason = `This ran past the ${Math.round(limits.timeoutMs / 1000)}s its tree was given.`;
-      for (const job of expired(store.ledger, wiring.now(), limits)) {
+      for (const job of expired(store.ledger, now, limits)) {
         if (isTerminal(find(store.ledger, job.id)?.state ?? 'failed')) continue;
         await halt(job.id, reason);
         commit(settle(store.ledger, job.id, { kind: 'timed_out', reason }, wiring.now()));

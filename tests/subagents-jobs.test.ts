@@ -18,17 +18,20 @@ const good = (): Report => ({
 
 /** A runner that spawns nothing and lets a test play the child by hand. */
 function fakeRunner(options: { hangs?: boolean; broken?: boolean; dyingOfAbort?: boolean } = {}) {
-  const runs = new Map<string, { job: Job; emit: (event: RunnerEvent) => void; stops: string[] }>();
+  const runs = new Map<string, { job: Job; emit: (event: RunnerEvent) => void; stops: string[]; steers: string[] }>();
   const held: ((handle: Handle) => void)[] = [];
   const runner: Runner = async (job, emit) => {
     if (options.broken) throw new Error('spawn ENOENT');
-    const run = { job, emit, stops: [] as string[] };
+    const run = { job, emit, stops: [] as string[], steers: [] as string[] };
     runs.set(job.id, run);
-    const handle: Handle = { stop: async reason => {
-      run.stops.push(reason);
-      // What a real child does when abort lands: agent_settled with no report.
-      if (options.dyingOfAbort) emit({ type: 'failed', reason: 'The child ended without reporting.' });
-    } };
+    const handle: Handle = {
+      stop: async reason => {
+        run.stops.push(reason);
+        // What a real child does when abort lands: agent_settled with no report.
+        if (options.dyingOfAbort) emit({ type: 'failed', reason: 'The child ended without reporting.' });
+      },
+      steer: async message => { run.steers.push(message); return true; },
+    };
     if (!options.hangs) return handle;
     // A child that is still starting: the handle exists only once released.
     return new Promise<Handle>(resolve => held.push(() => resolve(handle)));
@@ -116,6 +119,25 @@ test('a job cancelled while its child is still starting still stops that child',
     'the cancellation waited for the start it interrupted, instead of leaving the process behind');
 });
 
+test('a running root is told to narrow and report before its deadline', async () => {
+  const { jobs, clock, of } = jobsWith();
+  const root = await accepted(jobs);
+  const child = await accepted(jobs, { depth: 1, parentJobId: root.id });
+  of(root).emit({ type: 'running' }); of(child).emit({ type: 'running' });
+
+  clock.now = NOW + DEFAULT_LIMITS.timeoutMs * 0.6;
+  await jobs.tick(); await jobs.tick();
+  assert.equal(of(root).steers.length, 1, 'the first reminder is sent only once');
+  assert.match(of(root).steers[0], /Narrow the scope/);
+  assert.deepEqual(of(child).steers, [], 'one tree gets one reminder, not one per descendant');
+
+  clock.now = NOW + DEFAULT_LIMITS.timeoutMs * 0.85;
+  await jobs.tick(); await jobs.tick();
+  assert.equal(of(root).steers.length, 2, 'the final reminder is sent only once');
+  assert.match(of(root).steers[1], /call subagent_report/);
+  assert.equal(find(jobs.ledger(), root.id)?.state, 'running');
+});
+
 test('the clock belongs to the tree, and running out of it stops every child in it', async () => {
   const { jobs, clock, of } = jobsWith();
   const root = await accepted(jobs);
@@ -127,7 +149,7 @@ test('the clock belongs to the tree, and running out of it stops every child in 
   await jobs.tick();
 
   assert.equal(find(jobs.ledger(), root.id)?.state, 'timed_out');
-  assert.match(find(jobs.ledger(), root.id)?.reason ?? '', /ran past the 300s its tree was given/);
+  assert.match(find(jobs.ledger(), root.id)?.reason ?? '', /ran past the 600s its tree was given/);
   assert.equal(find(jobs.ledger(), child.id)?.state, 'cancelled', 'the tree goes together');
   assert.deepEqual(live(jobs.ledger()), []);
   assert.equal(of(root).stops.length, 1);
@@ -143,7 +165,7 @@ test('a child that dies of the abort does not relabel a timeout', async () => {
   await jobs.tick();
 
   assert.equal(find(jobs.ledger(), job.id)?.state, 'timed_out');
-  assert.match(find(jobs.ledger(), job.id)?.reason ?? '', /ran past the 300s/);
+  assert.match(find(jobs.ledger(), job.id)?.reason ?? '', /ran past the 600s/);
   assert.doesNotMatch(find(jobs.ledger(), job.id)?.reason ?? '', /without reporting/);
 });
 

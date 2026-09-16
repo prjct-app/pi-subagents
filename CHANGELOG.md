@@ -6,6 +6,7 @@
 - Reduce the editor status widget to compact text symbols (`●`, `○`, `!`) and hide it as soon as no subagent is running; completed attention items remain available in `/agents` without occupying the chat.
 - Add seven package-owned software-factory agents and nine lean playbooks for discovery, SDD/BDD, bug triage, implementation, quality, delivery and explicit product documentation.
 - Move package-owned runtime data to `~/.prjct/subagents`, isolate factory writers in external Git snapshots, and retain proposed changes as reviewable patches instead of writing client repositories.
+- Give agent trees ten minutes by default and steer running roots toward a report before their hard deadline.
 
 ## 0.2.0
 

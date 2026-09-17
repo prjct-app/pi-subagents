@@ -35,7 +35,8 @@ import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, t
  * as a session entry, which is free and is what the panel already reads; only
  * the bounded result of a finished job is ever sent, and only once.
  */
-const GUARD = fileURLToPath(new URL('./child.ts', import.meta.url));
+// The compiled local build (scripts/build-pi.mjs) ships child.js beside index.js; source runs keep child.ts.
+const GUARD = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './child.ts' : './child.js', import.meta.url));
 /** Only while something is open. Nothing here polls an idle session. */
 const TICK_MS = 5_000;
 /**

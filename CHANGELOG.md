@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add `npm run build:pi`: a compiled local build in `~/.pi/agent/builds/<package>` that Pi loads instead of the TypeScript sources.
 - Coalesce `agent-jobs` ledger snapshots into one write per second (settled jobs are written at once) and stop repeating delivered reports in them; reload restores reports from their `agent-job` entries. Sessions had accumulated 47MB of snapshots in three days.
 - Answer an unchanged `agent_jobs` status check in one line and tell the model not to poll: reports already arrive and wake an idle session. Status-only polling was ~11% of prompt tokens in real sessions.
 

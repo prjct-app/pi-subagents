@@ -278,6 +278,21 @@ test('every entry this writes has a renderer, and they render text', async () =>
     'the ledger is state for a reload and for the panel, not something to read in the transcript');
 });
 
+test('an unchanged status check answers briefly instead of re-listing the ledger', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'resume' });
+  const job = (await h.delegate()).details as Job;
+  const first = await h.tools.get('agent_jobs').execute('poll_1', { action: 'status' });
+  assert.match(first.content[0].text, /review the importer/);
+  const second = await h.tools.get('agent_jobs').execute('poll_2', { action: 'status' });
+  assert.match(second.content[0].text, /No change since your last check; 1 still running/);
+  assert.match(second.content[0].text, /do not poll/);
+  assert.doesNotMatch(second.content[0].text, /review the importer/);
+  await h.tools.get('agent_jobs').execute('stop', { action: 'cancel', jobId: job.id });
+  const changed = await h.tools.get('agent_jobs').execute('poll_3', { action: 'status' });
+  assert.doesNotMatch(changed.content[0].text, /No change/, 'a changed ledger is listed again');
+});
+
 test('status shows the tree, and cancelling one stops its child', async () => {
   const h = host();
   await h.emit('session_start', { reason: 'resume' });

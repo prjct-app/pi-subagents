@@ -516,12 +516,20 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   registerDelegate('');
 
+  // Real sessions spent ~11% of their prompt tokens on status calls that only
+  // waited for a report; each re-sent the whole context. Reports arrive by
+  // themselves and wake an idle session, so an unchanged ledger answers briefly.
+  const lastStatus = { snapshot: '' };
+  const ledgerSnapshot = (ledger: ReturnType<NonNullable<typeof state.jobs>['ledger']>): string =>
+    JSON.stringify(ledger.jobs.map(job => [job.id, job.state, Boolean(job.report)]));
+
   pi.registerTool({
     name: 'agent_jobs',
     label: 'Delegated jobs',
     description: 'Review the subagents this session started, or stop one. A job that came back '
       + 'blocked is unresolved work you own: this is where to see what is still open before calling '
-      + 'anything finished. Use result for full evidence, steer with a message to guide a live job, or resume with a message to continue a retained conversation.',
+      + 'anything finished. Use result for full evidence, steer with a message to guide a live job, or resume with a message to continue a retained conversation. '
+      + 'Never use status to wait: reports arrive in this conversation by themselves and wake the session when it is idle.',
     parameters: Type.Object({
       action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume'] as const),
       jobId: Type.Optional(Type.String({ maxLength: 128 })),
@@ -554,6 +562,20 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       }
       const ledger = jobs.ledger();
       const open = unresolved(ledger);
+      const snapshot = ledgerSnapshot(ledger);
+      const unchanged = snapshot === lastStatus.snapshot && ledger.jobs.some(job => !isTerminal(job.state));
+      lastStatus.snapshot = snapshot;
+      if (unchanged) {
+        return {
+          content: [{
+            type: 'text' as const,
+            text: `No change since your last check; ${ledger.jobs.filter(job => !isTerminal(job.state)).length} still running. `
+              + 'Their reports arrive here by themselves and wake this session when it is idle, so do not poll. '
+              + 'Continue your own work, or end your turn if nothing else is left.',
+          }],
+          details: ledger,
+        };
+      }
       return {
         content: [{
           type: 'text' as const,

@@ -38,6 +38,12 @@ import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, t
 const GUARD = fileURLToPath(new URL('./child.ts', import.meta.url));
 /** Only while something is open. Nothing here polls an idle session. */
 const TICK_MS = 5_000;
+/**
+ * Ledger snapshots were written on every commit: five within a second for one
+ * delegation, each carrying every report again. Real sessions accumulated 47MB
+ * of them in three days, 60% within two seconds of the previous one.
+ */
+const LEDGER_WRITE_MS = 1_000;
 
 export type JobsOptions = {
   /** The mailbox thread a job belongs to, when it was born inside one. */
@@ -51,6 +57,8 @@ export type JobsOptions = {
   /** External factory workspaces. Defaults to ~/.prjct/subagents/workspaces. */
   workspaceRoot?: string;
   tickMs?: number;
+  /** Coalescing window for ledger snapshots; 0 writes every commit. */
+  ledgerWriteMs?: number;
 };
 
 /** Auto-delegation starts off; a person turns it on with /agents auto on. */
@@ -85,6 +93,39 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const inFlight = new Map<string, number>();
   const recorded = new Set<string>();
   const retained = new Set<string>();
+  /**
+   * A job whose full record, report included, was already appended as an
+   * `agent-job` entry keeps only a reference in later snapshots; restore puts
+   * the report back from that entry.
+   */
+  const compactLedger = (ledger: Ledger): Ledger => ({
+    ...ledger,
+    jobs: ledger.jobs.map(job => recorded.has(job.id) && job.report ? { ...job, report: undefined } : job),
+  });
+  const ledgerWrite = {
+    pending: undefined as Ledger | undefined,
+    timer: undefined as ReturnType<typeof setTimeout> | undefined,
+    terminal: new Set<string>(),
+  };
+  const flushLedger = (): void => {
+    if (ledgerWrite.timer) clearTimeout(ledgerWrite.timer);
+    ledgerWrite.timer = undefined;
+    const ledger = ledgerWrite.pending;
+    ledgerWrite.pending = undefined;
+    if (ledger) pi.appendEntry('agent-jobs', compactLedger(ledger));
+  };
+  const persistLedger = (ledger: Ledger): void => {
+    ledgerWrite.pending = ledger;
+    // A job reaching a terminal state is written at once: its report must not
+    // sit in a timer when the process goes away.
+    const settled = ledger.jobs.filter(job => isTerminal(job.state) && !ledgerWrite.terminal.has(job.id));
+    for (const job of settled) ledgerWrite.terminal.add(job.id);
+    const windowMs = options.ledgerWriteMs ?? LEDGER_WRITE_MS;
+    if (windowMs <= 0 || settled.length > 0) { flushLedger(); return; }
+    if (ledgerWrite.timer) return;
+    ledgerWrite.timer = setTimeout(flushLedger, windowMs);
+    ledgerWrite.timer.unref?.();
+  };
   const state = {
     settings: defaultSettings(),
     delivering: false,
@@ -381,7 +422,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     return makeJobs(session, {
       runner: factory(runnerOptions), limits: state.settings.limits,
       now: () => Date.now(),
-      persist: ledger => pi.appendEntry('agent-jobs', ledger),
+      persist: persistLedger,
       onActivity: notify,
       onChange: ledger => {
         if (live(ledger).length > 0 || undelivered(ledger).length > 0) startTicking();
@@ -655,6 +696,11 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     inFlight.clear();
     recorded.clear();
     retained.clear();
+    // A snapshot still pending here belonged to the session that just ended.
+    if (ledgerWrite.timer) clearTimeout(ledgerWrite.timer);
+    ledgerWrite.timer = undefined;
+    ledgerWrite.pending = undefined;
+    ledgerWrite.terminal.clear();
     for (const entry of context.sessionManager.getBranch() as any[]) {
       if (entry.type === 'custom' && entry.customType === 'agent-job' && entry.data?.id) recorded.add(entry.data.id);
     }
@@ -679,7 +725,12 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     if (!checkLedger(data) || data.session !== context.sessionManager.getSessionId()) return;
     const receipts = new Set<string>((context.sessionManager.getBranch() as any[]).flatMap(entry =>
       entry.type === 'custom_message' && entry.customType === 'agent-job-result' ? entry.details?.deliveryIds ?? [] : []));
-    await jobs.restore({ ...(data as Ledger), jobs: (data as Ledger).jobs.map(job => receipts.has(job.id) ? { ...job, delivered: job.delivered ?? Date.now() } : job) });
+    const reports = new Map<string, unknown>((context.sessionManager.getBranch() as any[]).flatMap(entry =>
+      entry.type === 'custom' && entry.customType === 'agent-job' && entry.data?.id && entry.data.report ? [[entry.data.id, entry.data.report]] : []));
+    await jobs.restore({ ...(data as Ledger), jobs: (data as Ledger).jobs.map(job => {
+      const withReport = job.report || !reports.has(job.id) ? job : { ...job, report: reports.get(job.id) as Job['report'] };
+      return receipts.has(job.id) ? { ...withReport, delivered: withReport.delivered ?? Date.now() } : withReport;
+    }) });
     deliver();
   });
 
@@ -703,6 +754,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     state.closed = true;
     stopTicking();
     await state.jobs?.close('The session that owned this ended.').catch(() => undefined);
+    // Before the next session starts: a later append would land in that session.
+    flushLedger();
   });
 
   /**

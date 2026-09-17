@@ -8,6 +8,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installJobs } from '../src/index.ts';
 import type { Handle, Runner, RunnerEvent } from '../src/runner.ts';
 import type { Job, Report } from '../src/schema.ts';
+import { isTerminal as isTerminalState } from '../src/schema.ts';
 
 const good = (over: Partial<Report> = {}): Report => ({
   outcome: 'completed', summary: 'Read the importer.',
@@ -17,7 +18,7 @@ const good = (over: Partial<Report> = {}): Report => ({
 });
 
 /** The host, as much of it as this extension touches. */
-function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; cwd?: string; workspaceRoot?: string } = {}) {
+function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; cwd?: string; workspaceRoot?: string; ledgerWriteMs?: number } = {}) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const renderers = new Map<string, any>();
@@ -71,7 +72,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   }) as any;
   const made: any[] = [];
 
-  installJobs(pi, { makeRunner, tickMs: 50, ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
+  installJobs(pi, { makeRunner, tickMs: 50, ledgerWriteMs: options.ledgerWriteMs ?? 0, ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
 
   const emit = async (name: string, event: unknown = {}) => {
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
@@ -484,6 +485,41 @@ test('steering clears a pending question and result returns full evidence', asyn
   h.of(job).emit({ type: 'settled', report: good() }); await settleTick();
   const result = await h.tools.get('agent_jobs').execute('result', { action: 'result', jobId: job.id });
   assert.deepEqual(result.details.report, good()); await h.emit('session_shutdown');
+});
+
+test('ledger snapshots coalesce, but a settled job is written at once', async () => {
+  const h = host({ ledgerWriteMs: 60_000 });
+  await h.emit('session_start', { reason: 'resume' });
+  const job = (await h.delegate()).details as Job;
+  await settleTick();
+  assert.equal(h.entries.filter(entry => entry.customType === 'agent-jobs').length, 0, 'admission bookkeeping waits for the window');
+  h.of(job).emit({ type: 'settled', report: good() });
+  await settleTick();
+  const snapshots = h.entries.filter(entry => entry.customType === 'agent-jobs');
+  assert.equal(snapshots.length, 1, 'one snapshot instead of one per commit');
+  assert.ok(isTerminalState(snapshots[0]!.data.jobs[0].state));
+  await h.emit('session_shutdown');
+});
+
+test('delivered reports are not repeated in later snapshots and come back on reload', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'resume' });
+  const job = (await h.delegate()).details as Job;
+  h.of(job).emit({ type: 'settled', report: good() });
+  await settleTick();
+  await h.emit('agent_settled');
+  assert.equal(h.sent.length, 1);
+  // Any later commit (another delegation) writes a snapshot without the delivered report.
+  await h.delegate({ subject: 'second look' });
+  const latest = h.ledger();
+  assert.equal(latest.jobs.find((item: Job) => item.id === job.id).report, undefined);
+  assert.ok(h.entries.some(entry => entry.customType === 'agent-job' && entry.data.id === job.id && entry.data.report));
+  await h.emit('session_shutdown');
+  const again = host();
+  again.entries.push(...h.entries);
+  await again.emit('session_start', { reason: 'reload' });
+  const result = await again.tools.get('agent_jobs').execute('result', { action: 'result', jobId: job.id });
+  assert.deepEqual(result.details.report, good());
 });
 
 test('reader roles never inherit writable tools even from writable parents', async () => {

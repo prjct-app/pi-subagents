@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Answer an unchanged `agent_jobs` status check in one line and tell the model not to poll: reports already arrive and wake an idle session. Status-only polling was ~11% of prompt tokens in real sessions.
+
 ## 0.3.0 - 2026-09-16
 
 - Reworked `/agents` into a bounded, content-first panel with one-row agent lists, explicit pane focus, compact contextual controls, confirmed stop actions and usable layouts down to 40×12 terminals.

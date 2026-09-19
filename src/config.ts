@@ -40,8 +40,16 @@ export function loadSettings(cwd: string, home = agentHome(), warn: (text: strin
   }, defaultSettings());
 }
 
-export function roleTools(role: Role, active: readonly string[], allowBash = process.env.PI_SUBAGENTS_ALLOW_BASH === '1'): string[] {
-  const tools = active.filter(name => !name.startsWith('agent_') && !name.startsWith('subagent_'));
+const CORE_TOOLS = new Set<string>([...READ_ONLY_TOOLS, 'edit', 'write', 'bash']);
+
+/**
+ * A child starts with --no-extensions, so a third-party tool it did not load
+ * is missing and fails the startup capability handshake. Only packages named
+ * in extensionPackages bring their tools along.
+ */
+export function roleTools(role: Role, active: readonly string[], allowBash = process.env.PI_SUBAGENTS_ALLOW_BASH === '1', allowExtensionTools = false): string[] {
+  const tools = active.filter(name => !name.startsWith('agent_') && !name.startsWith('subagent_'))
+    .filter(name => allowExtensionTools || CORE_TOOLS.has(name));
   if (role !== 'worker') return tools.filter(name => (READ_ONLY_TOOLS as readonly string[]).includes(name));
   return tools.filter(name => name !== 'bash' || (allowBash && (tools.includes('edit') || tools.includes('write'))));
 }

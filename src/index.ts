@@ -200,7 +200,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const inheritedTools = (role: Role): string[] => {
     try {
       const active = pi.getActiveTools().filter(name => name !== 'agent_delegate' && name !== 'agent_jobs');
-      return roleTools(role, active);
+      return roleTools(role, active, undefined, state.settings.extensionPackages.length > 0);
     } catch {
       return [...READ_ONLY_TOOLS];
     }

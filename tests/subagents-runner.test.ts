@@ -247,8 +247,27 @@ test('an agent_end settles nothing, and ending without a report is a failure', a
   assert.equal(ended(), undefined, 'agent_end alone settles nothing');
 
   child.say({ type: 'agent_settled' });
+  await until('it prompts for a report', () => child.sent.some((message: any) =>
+    message.type === 'prompt' && String(message.message ?? '').includes('subagent_report')));
+  assert.equal(child.sent.some((message: any) => message.type === 'steer'
+    && String(message.message ?? '').includes('subagent_report')), false,
+  'an idle child needs a prompt; an accepted steer starts no recovery turn');
+  assert.equal(ended(), undefined, 'one chance to report before failing');
+
+  child.say({ type: 'agent_settled' });
   await until('it fails', () => ended() !== undefined);
   assert.match((ended() as any).reason, /ended without reporting/);
+});
+
+test('a child that reports after the nudge still settles', async () => {
+  const { child, events, ended } = await started({}, live);
+  await until('it is running', () => events.some(event => event.type === 'running'));
+  child.say({ type: 'agent_settled' });
+  await until('it prompts for a report', () => child.sent.some((message: any) =>
+    message.type === 'prompt' && String(message.message ?? '').includes('subagent_report')));
+  child.report({ outcome: 'completed', summary: 'done' });
+  await until('it settles', () => ended() !== undefined);
+  assert.equal((ended() as any).type, 'settled');
 });
 
 test('stopping a child that then settles without a report is not a failure of the job', async () => {

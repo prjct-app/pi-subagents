@@ -13,10 +13,12 @@ type Options = Parameters<typeof spawnRunner>[0];
 /** Native Pi sessions with explicit resources and per-session state; never mutates process.env or cwd. */
 export function inProcessRunner(options: Options): Runner {
   return async (job, emit) => {
-    const slot: { session?: AgentSession; done: boolean; stop?: Promise<void>; timer?: ReturnType<typeof setInterval>; offset: number; forwarding: boolean; sent: number } = { done: false, offset: 0, forwarding: false, sent: 0 };
+    const slot: { session?: AgentSession; done: boolean; stop?: Promise<void>; timer?: ReturnType<typeof setInterval>; offset: number; forwarding: boolean; sent: number; nudged: boolean } = { done: false, offset: 0, forwarding: false, sent: 0, nudged: false };
     const mayDelegate = Boolean(options.onDelegate) && job.depth + 1 < (options.depth ?? 2);
     const wired = Boolean(options.wireRoot && job.wire);
-    const permitted = roleTools(job.role, job.tools ?? READ_ONLY_TOOLS);
+    // Admission already removed ambient extension tools unless their packages
+    // were configured explicitly; keep that admitted set here.
+    const permitted = roleTools(job.role, job.tools ?? READ_ONLY_TOOLS, undefined, true);
     const tools = [...new Set([...permitted, REPORT_TOOL, MODEL_TOOL, ASK_TOOL, ...(mayDelegate ? [DELEGATE_TOOL] : []), ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : [])])];
     const stop = (): Promise<void> => {
       if (slot.stop) return slot.stop;
@@ -114,7 +116,13 @@ export function inProcessRunner(options: Options): Runner {
           emit({ type: 'report', report });
           terminal({ type: 'settled', report, usage: { tokens: Math.max(0, stats.tokens.total - baseline.tokens.total), cost: Math.max(0, stats.cost - baseline.cost), calls: Math.max(0, stats.toolCalls - baseline.toolCalls) } });
         }
-        if (raw.type === 'agent_settled') terminal({ type: 'failed', reason: 'The child ended without reporting.' });
+        if (raw.type === 'agent_settled') {
+          if (slot.nudged) { terminal({ type: 'failed', reason: 'The child ended without reporting.' }); return; }
+          slot.nudged = true;
+          void steer(`You settled without calling ${REPORT_TOOL}. Call ${REPORT_TOOL} now with the evidence you have. Do not wait.`).then(ok => {
+            if (!ok && !slot.done) terminal({ type: 'failed', reason: 'The child ended without reporting.' });
+          });
+        }
       });
       if (file) emit({ type: 'session', file });
       emit({ type: 'running' });

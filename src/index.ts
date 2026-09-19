@@ -6,8 +6,8 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
-import { Container, Text } from '@earendil-works/pi-tui';
-import { SYMBOL, row, setMode } from '@prjct.app/pi-tui-kit';
+import { Container, Key, Text } from '@earendil-works/pi-tui';
+import { SYMBOL, brand, completer, row, setMode } from '@prjct.app/pi-tui-kit';
 import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
@@ -167,10 +167,13 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     } catch { /* not initialized yet: session_start applies it */ }
     showWidget(context);
   };
-  const setDelegation = (enabled: boolean, context: ExtensionContext): void => {
+  const setDelegation = (enabled: boolean, context: ExtensionContext, quiet = false): void => {
     state.delegation.enabled = enabled;
     try { pi.appendEntry('agents-mode', { enabled }); } catch { /* the session is closing */ }
     applyDelegation(context);
+    if (!quiet) context.ui.notify(enabled
+      ? 'Subagents on: the model may delegate separable work. /agents off to stop.'
+      : 'Subagents off: the model does the work itself. /agents on to allow delegation.', 'info');
   };
 
   const ctx = (): ExtensionContext => {
@@ -816,16 +819,26 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     limits: () => state.settings.limits,
   };
   pi.registerCommand('agents', {
-    description: 'Subagents: /agents on lets the model delegate, /agents off stops it (default), /agents opens the panel',
-    getArgumentCompletions(prefix) {
-      return ['on', 'off'].filter(value => value.startsWith(prefix.trim())).map(value => ({ value, label: value }));
-    },
+    description: brand('subagents: on | off | panel (Ctrl+Alt+A toggles)'),
+    getArgumentCompletions: completer([
+      { value: 'on', description: 'allow the model to delegate separable work' },
+      { value: 'off', description: 'the model does the work itself (default)' },
+    ]),
     handler: async (args, context) => {
       const word = args.trim();
       if (word === 'on' || word === 'off') { setDelegation(word === 'on', context); return; }
+      if (word) { context.ui.notify('Usage: /agents [on|off]. /agents alone opens the panel.', 'warning'); return; }
       if (context.mode !== 'tui') { context.ui.notify(handle.lines().join('\n'), 'info'); return; }
-      await openAgentsPanel(context, handle);
+      await openAgentsPanel(context, {
+        ...handle,
+        delegation: () => state.delegation.enabled,
+        setDelegation: enabled => setDelegation(enabled, context, true),
+      });
     },
+  });
+  pi.registerShortcut?.(Key.ctrlAlt('a'), {
+    description: brand('toggle subagent delegation'),
+    handler: async context => setDelegation(!state.delegation.enabled, context),
   });
   // Other extensions in this process (pi-team, most of all) read the ledger
   // through the registry: jiti gives each package its own module graph, so the

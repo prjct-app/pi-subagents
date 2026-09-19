@@ -581,3 +581,17 @@ test('fire-and-forget acceptance is not delivery; unobserved sends retry until a
   assert.equal(h.entries.filter(entry => entry.customType === 'agent-job').length, 1);
   await h.emit('session_shutdown');
 });
+
+test('/agents completes on and off with the prjct mark, and o in the panel toggles delegation', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'startup' });
+  const agents = h.commands.get('agents');
+  assert.match(agents.description, /^p · subagents/);
+  assert.deepEqual(agents.getArgumentCompletions('').map((item: any) => [item.value, item.description]), [
+    ['on', 'p · allow the model to delegate separable work'],
+    ['off', 'p · the model does the work itself (default)'],
+  ]);
+  await agents.handler('on', h.ctx);
+  assert.match(h.notices.at(-1) ?? '', /Subagents on/);
+  assert.ok(h.activeTools.names.includes('agent_delegate'));
+});

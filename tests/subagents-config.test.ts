@@ -29,7 +29,10 @@ test('readers cannot gain mutation, shell or unknown extension capabilities', ()
   const active = ['read', 'grep', 'edit', 'write', 'bash', 'remote_mutation', 'agent_reply', 'subagent_send'];
   assert.deepEqual(roleTools('reviewer', active, true), ['read', 'grep']);
   assert.deepEqual(roleTools('explorer', active, true), ['read', 'grep']);
-  assert.deepEqual(roleTools('worker', active, false), ['read', 'grep', 'edit', 'write', 'remote_mutation']);
+  assert.deepEqual(roleTools('worker', active, false), ['read', 'grep', 'edit', 'write'],
+    'an ambient extension tool the child never loads is not inherited');
+  assert.deepEqual(roleTools('worker', active, false, true), ['read', 'grep', 'edit', 'write', 'remote_mutation'],
+    'explicit extension packages keep their admitted tools');
   assert.ok(roleTools('worker', active, true).includes('bash'));
   assert.deepEqual(roleTools('worker', ['read', 'bash'], true), ['read']);
 });

@@ -273,9 +273,11 @@ export function spawnRunner(options: {
       baseline: undefined as Usage | undefined,
       seq: 0, stderr: '',
       report: undefined as unknown,
-      finishing: false, done: false,
+      finishing: false, done: false, nudged: false,
       stopping: undefined as Promise<void> | undefined,
     };
+    const alive = (): boolean => child.exitCode === null && child.signalCode === null;
+    const REPORT_NUDGE = `You settled without calling ${REPORT_TOOL}. Call ${REPORT_TOOL} now with the evidence you have. Do not wait. This is the last chance to report.`;
     const send = (command: Record<string, unknown>): Promise<Record<string, unknown>> => {
       const id = ++state.seq;
       const wait = new Promise<Record<string, unknown>>(resolve => pending.set(id, resolve));
@@ -409,6 +411,14 @@ export function spawnRunner(options: {
      */
     const finish = async (): Promise<void> => {
       if (state.finishing || state.stopping) return;
+      if (state.report === undefined && alive() && !state.nudged) {
+        state.nudged = true;
+        // agent_settled means the child is idle. Pi accepts a steer in that
+        // state but only queues it and starts no turn, so completed research
+        // was lost as a failed job. A prompt starts one bounded recovery turn.
+        const prompted = await within(2_000, send({ type: 'prompt', message: REPORT_NUDGE }), { success: false } as Record<string, unknown>);
+        if (prompted.success === true && state.report === undefined && alive() && !state.done && !state.stopping) return;
+      }
       state.finishing = true;
       const usage = state.observed ? { ...state.observed, calls: state.toolCalls } : await spent();
       if (state.report === undefined) {
@@ -485,7 +495,6 @@ export function spawnRunner(options: {
 
     /** Resolves the moment the process is actually gone, and never on a timer. */
     const departed = new Promise<void>(resolve => child.once('exit', () => resolve()));
-    const alive = (): boolean => child.exitCode === null && child.signalCode === null;
 
     child.on('exit', code => {
       for (const resolve of pending.values()) resolve({ success: false });

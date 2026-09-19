@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Give an idle child one prompt to call `subagent_report` when it settles without reporting. An accepted RPC steer starts no turn after `agent_settled`, so completed research was being discarded as a failed job.
+- Stop passing ambient third-party tools to children that never load their package; they failed the startup capability handshake. Tools from explicitly configured `extensionPackages` are still passed.
 - Subagents are now off by default, like plan mode. While off, the model does not see `agent_delegate`, and a call that slips through is refused with "do this task yourself". `/agents on` allows delegation and keeps a fixed `Agents on` line below the editor. `/agents off` hides both, and `/agents` opens the panel. The choice survives a reload. `/agents auto on|off` is removed; `PI_AGENTS_AUTO=1` triages only while delegation is on.
 - Add `npm run build:pi`: a compiled local build in `~/.pi/agent/builds/<package>` that Pi loads instead of the TypeScript sources.
 - Coalesce `agent-jobs` ledger snapshots into one write per second (settled jobs are written at once) and stop repeating delivered reports in them; reload restores reports from their `agent-job` entries. Sessions had accumulated 47MB of snapshots in three days.

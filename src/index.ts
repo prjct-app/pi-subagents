@@ -581,6 +581,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
           details: job,
         };
       },
+      renderShell: 'self',
       renderCall(args: any, theme: any, context: any) {
         // Until the job exists the call is the row; then the job row replaces it.
         if (context?.isPartial === false) return new Container();
@@ -671,6 +672,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         details: ledger,
       };
     },
+    renderShell: 'self',
     renderCall(_args: any, _theme: any) { return new Container(); },
     renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return ledgerView(result?.details, expanded, theme); },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
@@ -695,6 +697,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       if (!sent) throw new Error(`${input.name} is not reachable any more. Its report stands on its own.`);
       return { content: [{ type: 'text' as const, text: `Answered ${input.name}. Carry on with your own work.` }], details: { name: input.name } };
     },
+    renderShell: 'self',
     renderCall(args: any, theme: any) {
       return row(theme, { symbol: SYMBOL.ok, tone: 'success', verb: 'AGENT', target: `reply · ${plain(String(args?.name ?? ''))}` });
     },

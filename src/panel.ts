@@ -17,6 +17,9 @@ export type PanelSource = {
   subscribe?: (listener: () => void) => () => void;
   limits?: () => Limits;
   transcript?: (file: string) => Promise<TranscriptEntry[]>;
+  /** Whether the model may delegate, and how to change it from the panel. */
+  delegation?: () => boolean;
+  setDelegation?: (enabled: boolean) => void;
 };
 
 /** Corrupt cycles or missing ancestors must not hide a job or recurse forever. */
@@ -238,7 +241,9 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const stats = width < 56
       ? `${accent(`●${active}`)}  ${dim(`○${queue}`)}  ${attention ? theme.fg('warning', `!${attention}`) : dim('!0')}`
       : `${accent(`● ${active} running`)}  ${dim(`○ ${queue} queued`)}  ${attention ? theme.fg('warning', `! ${attention} attention`) : dim('! 0 attention')}`;
-    const title = ` ${accent(theme.bold('Agents'))}  ${stats}  ${theme.fg('muted', filter.toLowerCase())}`;
+    const on = source.delegation?.();
+    const mode = on === undefined ? '' : on ? `${theme.fg('success', '◆ delegation on')}  ` : `${dim('◇ delegation off')}  `;
+    const title = ` ${accent(theme.bold('Agents'))}  ${mode}${stats}  ${theme.fg('muted', filter.toLowerCase())}`;
     const find = state.searching || state.query ? '' : dim('/ search ');
     const head = `${title}${' '.repeat(Math.max(2, width - visibleWidth(title) - visibleWidth(find)))}${find}`;
     const bodyHeight = Math.max(2, state.height - 4);
@@ -262,7 +267,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const hints = state.help ? narrow ? '↑↓ scroll · ?/Esc close' : 'Esc close help'
       : state.searching ? narrow ? '/ find · Enter done · Esc clear' : 'Type to filter · Enter apply · Esc cancel'
       : state.composing ? narrow ? 'Ctrl+S send · Esc save draft' : 'Enter newline · Ctrl+Enter / Ctrl+S send · Esc save draft'
-      : state.focus === 'tree' ? narrow ? '↑↓ move · enter open · / find · esc' : 'enter open · s message · x stop · f filter · / search · ? keys · esc'
+      : state.focus === 'tree' ? narrow ? '↑↓ move · enter open · o on/off · esc' : `enter open · o ${source.delegation?.() ? 'turn off' : 'turn on'} · s message · x stop · f filter · / search · ? keys · esc`
       : narrow ? `↑↓ ${position || 'scroll'} · s msg · Esc back` : `↑↓ scroll${position ? ` ${position}` : ''} · Tab agents · 1–3 view · s message · x stop · Esc back`;
     // Same grammar as every other panel: the key in accent, then what it does.
     const keyed = (text: string): string => text.split(' · ').map(part => {
@@ -347,6 +352,11 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     } else if (data === '?') state.help = true;
     else if (data === '/') { state.searching = true; search.focused = true; search.setValue(state.query); }
     else if (data === 'f') { state.filter = (state.filter + 1) % 3; resetView(); }
+    else if (data === 'o' && source.setDelegation && source.delegation) {
+      const next = !source.delegation();
+      source.setDelegation(next);
+      state.notice = next ? 'Delegation on: the model may start subagents.' : 'Delegation off: the model does the work itself.';
+    }
     else if (matchesKey(data, Key.tab)) state.focus = state.focus === 'tree' ? 'detail' : 'tree';
     else if (['1', '2', '3'].includes(data)) { state.tab = Number(data) - 1; state.focus = 'detail'; resetView(); }
     else if (data === 's') compose('steer');

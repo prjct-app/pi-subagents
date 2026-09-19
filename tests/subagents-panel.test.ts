@@ -223,3 +223,14 @@ test('64-job navigation and rendering stay under 100 ms per interaction', t => {
   const times = Array.from({ length: 30 }, () => { const start = performance.now(); h.panel.handleInput('j'); h.text(160); return performance.now() - start; });
   assert.ok(Math.max(...times) < 100, `Slowest interaction ${Math.max(...times)}ms`);
 });
+
+test('the panel says whether delegation is on, and o turns it on or off', t => {
+  const mode = { on: false };
+  const h = harness([], { delegation: () => mode.on, setDelegation: enabled => { mode.on = enabled; } }); t.after(() => h.panel.dispose());
+  assert.match(h.text(), /Agents {2}◇ delegation off/);
+  assert.match(h.text(), /o turn on/);
+  h.panel.handleInput('o');
+  assert.equal(mode.on, true);
+  assert.match(h.text(), /◆ delegation on/);
+  assert.match(h.text(), /Delegation on: the model may start subagents/);
+});

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Container, Text } from '@earendil-works/pi-tui';
+import { SYMBOL, setMode } from '@prjct.app/pi-tui-kit';
 import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
@@ -331,9 +332,9 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   };
 
   /**
-   * One fixed line below the editor while delegation is on, nothing while it
-   * is off. It is the same ledger the panel draws, so the two can never
-   * disagree; the 5s tick that already runs for live jobs keeps it moving.
+   * The agents mode on the shared mode line (p-ui) while delegation is on,
+   * nothing while it is off. It reads the same ledger the panel draws, so the
+   * two never disagree; the 5s tick that runs for live jobs keeps it moving.
    */
   const showWidget = (given?: ExtensionContext): void => {
     const context = given ?? state.ctx;
@@ -342,11 +343,15 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const active = all.filter(job => !isTerminal(job.state) && job.state !== 'queued');
     const queued = all.filter(job => job.state === 'queued');
     const attention = all.filter(needsAttention);
-    const statuses = [`● ${active.length}`, ...(queued.length ? [`○ ${queued.length}`] : []), ...(attention.length ? [`! ${attention.length}`] : [])];
-    const text = state.delegation.enabled ? `󰚩  Agents on  ${statuses.join('  ')}  /agents off` : undefined;
+    const counts = [
+      ...(active.length ? [`${SYMBOL.active} ${active.length}`] : []),
+      ...(queued.length ? [`${SYMBOL.idle} ${queued.length}`] : []),
+      ...(attention.length ? [`${SYMBOL.attention} ${attention.length}`] : []),
+    ];
+    const text = state.delegation.enabled ? ['agents', ...counts].join(' ') : undefined;
     if (text === state.widget) return;
     state.widget = text;
-    context.ui.setWidget('agents', text === undefined ? undefined : [text], { placement: 'belowEditor' });
+    setMode(context, 'agents', text);
   };
 
   /** One bounded answer from the cheapest model this session can reach. */

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Publish the agents mode through `@prjct.app/pi-tui-kit` (`◆ agents ● n` on the shared mode line that p-ui draws) instead of drawing a separate widget.
 - Give an idle child one prompt to call `subagent_report` when it settles without reporting. An accepted RPC steer starts no turn after `agent_settled`, so completed research was being discarded as a failed job.
 - Stop passing ambient third-party tools to children that never load their package; they failed the startup capability handshake. Tools from explicitly configured `extensionPackages` are still passed.
 - Subagents are now off by default, like plan mode. While off, the model does not see `agent_delegate`, and a call that slips through is refused with "do this task yourself". `/agents on` allows delegation and keeps a fixed `Agents on` line below the editor. `/agents off` hides both, and `/agents` opens the panel. The choice survives a reload. `/agents auto on|off` is removed; `PI_AGENTS_AUTO=1` triages only while delegation is on.

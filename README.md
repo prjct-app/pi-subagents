@@ -16,7 +16,7 @@ Subagents start **off**, like plan mode. While off, the model does not see
 `agent_delegate` and does the work itself.
 
 ```text
-/agents on    # allow delegation; a fixed "Agents on" line stays below the editor
+/agents on    # allow delegation; "◆ agents ● n" joins the mode line below the editor
 /agents off   # stop delegation and hide the line (default)
 ```
 

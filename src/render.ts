@@ -1,5 +1,6 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
-import { Text, truncateToWidth } from '@earendil-works/pi-tui';
+import { Container, Text, truncateToWidth, type Component } from '@earendil-works/pi-tui';
+import { SYMBOL, row } from '@prjct.app/pi-tui-kit';
 import { plain } from './text.ts';
 import type { Job, JobState, Ledger, Report } from './schema.ts';
 
@@ -99,11 +100,29 @@ export function themedJobLine(job: Job, theme: Theme): string {
     + `${plain(job.subject)} ${theme.fg('dim', `${seconds(job)}${spent(job)}`)}`;
 }
 
+/** The shared transcript row: status, AGENT, who and what, then state and time. */
+export function jobRow(job: Job, theme: Theme): Component {
+  const status = statusOf(job);
+  return row(theme, {
+    symbol: status.icon === '×' ? SYMBOL.error : status.icon, tone: status.color, verb: 'AGENT',
+    target: `${plain(job.name)} · ${plain(job.subject)}`,
+    meta: `${status.label.toLowerCase()} · ${seconds(job)}${spent(job)}`, metaTone: status.color === 'warning' || status.color === 'error' ? status.color : 'dim',
+  });
+}
+
+/** Collapsed: one row. Expanded: the row, then the report beneath it. */
+export function withBody(head: Component, body: readonly string[]): Component {
+  if (!body.length) return head;
+  const container = new Container();
+  container.addChild(head);
+  container.addChild(new Text(body.join('\n'), 2, 0));
+  return container;
+}
+
 export function jobView(job: Job | undefined, expanded: boolean, theme?: Theme) {
   if (!job || typeof job.subject !== 'string') return new Text('Job unavailable', 0, 0);
-  const heading = theme ? `▸ ${themedJobLine(job, theme)}` : `▸ ${jobLine(job)}`;
-  if (!expanded) return collapsed(heading);
-  return new Text([heading, ...reportLines(job), ...(job.patchFile ? [`External patch: ${plain(job.patchFile)}`] : [])].join('\n'), 1, 0);
+  if (!theme) return expanded ? new Text([`▸ ${jobLine(job)}`, ...reportLines(job)].join('\n'), 1, 0) : collapsed(`▸ ${jobLine(job)}`);
+  return withBody(jobRow(job, theme), expanded ? [...reportLines(job), ...(job.patchFile ? [`External patch: ${plain(job.patchFile)}`] : [])] : []);
 }
 
 export function ledgerView(ledger: Ledger | undefined, expanded: boolean, theme?: Theme) {
@@ -111,9 +130,8 @@ export function ledgerView(ledger: Ledger | undefined, expanded: boolean, theme?
   const open = jobs.filter(job => job.state === 'running' || job.state === 'starting' || job.state === 'queued').length;
   const heading = `▸ jobs · ${jobs.length} delegated · ${open} open`;
   if (theme) {
-    const titled = theme.fg('toolTitle', theme.bold(heading));
-    if (!expanded) return collapsed(titled);
-    return new Text([titled, ...ledgerLines(ledger)].join('\n'), 1, 0);
+    const head = row(theme, { symbol: open ? SYMBOL.active : SYMBOL.idle, tone: open ? 'accent' : 'muted', verb: 'AGENT', target: 'jobs · status', meta: `${jobs.length} delegated · ${open} open` });
+    return withBody(head, expanded ? ledgerLines(ledger) : []);
   }
   if (!expanded) return collapsed(heading);
   return new Text([heading, ...ledgerLines(ledger)].join('\n'), 1, 0);

@@ -7,11 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Container, Text } from '@earendil-works/pi-tui';
+import { SYMBOL, row, setMode } from '@prjct.app/pi-tui-kit';
 import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
 import { DEFAULT_LIMITS, find, live, undelivered, unresolved } from './manager.ts';
-import { needsAttention, jobView, ledgerLines, ledgerView, resultContent, themedJobLine } from './render.ts';
+import { needsAttention, jobView, ledgerLines, ledgerView, resultContent, themedJobLine, withBody } from './render.ts';
 import { getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
@@ -331,9 +332,9 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   };
 
   /**
-   * One fixed line below the editor while delegation is on, nothing while it
-   * is off. It is the same ledger the panel draws, so the two can never
-   * disagree; the 5s tick that already runs for live jobs keeps it moving.
+   * The agents mode on the shared mode line (p-ui) while delegation is on,
+   * nothing while it is off. It reads the same ledger the panel draws, so the
+   * two never disagree; the 5s tick that runs for live jobs keeps it moving.
    */
   const showWidget = (given?: ExtensionContext): void => {
     const context = given ?? state.ctx;
@@ -342,11 +343,15 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const active = all.filter(job => !isTerminal(job.state) && job.state !== 'queued');
     const queued = all.filter(job => job.state === 'queued');
     const attention = all.filter(needsAttention);
-    const statuses = [`● ${active.length}`, ...(queued.length ? [`○ ${queued.length}`] : []), ...(attention.length ? [`! ${attention.length}`] : [])];
-    const text = state.delegation.enabled ? `󰚩  Agents on  ${statuses.join('  ')}  /agents off` : undefined;
+    const counts = [
+      ...(active.length ? [`${SYMBOL.active} ${active.length}`] : []),
+      ...(queued.length ? [`${SYMBOL.idle} ${queued.length}`] : []),
+      ...(attention.length ? [`${SYMBOL.attention} ${attention.length}`] : []),
+    ];
+    const text = state.delegation.enabled ? ['agents', ...counts].join(' ') : undefined;
     if (text === state.widget) return;
     state.widget = text;
-    context.ui.setWidget('agents', text === undefined ? undefined : [text], { placement: 'belowEditor' });
+    setMode(context, 'agents', text);
   };
 
   /** One bounded answer from the cheapest model this session can reach. */
@@ -505,9 +510,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   pi.registerEntryRenderer<Job>('agent-job', (entry, { expanded }, theme) => jobView(entry.data, expanded, theme));
   pi.registerMessageRenderer<{ jobs?: Job[] }>('agent-job-result', (message, { expanded }, theme) => {
     const jobs = message.details?.jobs ?? [];
-    const heading = theme.fg('toolTitle', theme.bold(`▸ ${jobs.length} job${jobs.length === 1 ? '' : 's'} reported`));
-    if (!expanded) return new Text(heading, 0, 0);
-    return new Text([heading, ...jobs.map(job => themedJobLine(job, theme))].join('\n'), 1, 0);
+    const head = row(theme, { symbol: SYMBOL.ok, tone: 'success', verb: 'AGENT', target: `${jobs.length} job${jobs.length === 1 ? '' : 's'} reported`, meta: jobs.map(job => plain(job.name)).join(', ') });
+    return withBody(head, expanded ? jobs.map(job => themedJobLine(job, theme)) : []);
   });
 
   /**
@@ -577,10 +581,11 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
           details: job,
         };
       },
-      renderCall(args: any, theme: any) {
-        const text = theme.fg('toolTitle', theme.bold('▸ delegate'))
-          + ` ${theme.fg('muted', String(args?.agent ?? args?.role ?? ''))} ${plain(String(args?.subject ?? ''))}`;
-        return new Text(text, 0, 0);
+      renderShell: 'self',
+      renderCall(args: any, theme: any, context: any) {
+        // Until the job exists the call is the row; then the job row replaces it.
+        if (context?.isPartial === false) return new Container();
+        return row(theme, { symbol: SYMBOL.active, tone: 'accent', verb: 'AGENT', target: `${plain(String(args?.agent ?? args?.role ?? 'worker'))} · ${plain(String(args?.subject ?? ''))}`, meta: 'starting…' });
       },
       renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return jobView(result?.details, expanded, theme); },
     } as Parameters<ExtensionAPI['registerTool']>[0]);
@@ -667,9 +672,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         details: ledger,
       };
     },
-    renderCall(args: any, theme: any) {
-      return new Text(`${theme.fg('toolTitle', theme.bold('▸ jobs'))} ${theme.fg('muted', String(args?.action ?? 'status'))}`, 0, 0);
-    },
+    renderShell: 'self',
+    renderCall(_args: any, _theme: any) { return new Container(); },
     renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return ledgerView(result?.details, expanded, theme); },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
 
@@ -693,8 +697,9 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       if (!sent) throw new Error(`${input.name} is not reachable any more. Its report stands on its own.`);
       return { content: [{ type: 'text' as const, text: `Answered ${input.name}. Carry on with your own work.` }], details: { name: input.name } };
     },
+    renderShell: 'self',
     renderCall(args: any, theme: any) {
-      return new Text(`${theme.fg('toolTitle', theme.bold('▸ reply'))} ${theme.fg('muted', String(args?.name ?? ''))}`, 0, 0);
+      return row(theme, { symbol: SYMBOL.ok, tone: 'success', verb: 'AGENT', target: `reply · ${plain(String(args?.name ?? ''))}` });
     },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
 
@@ -714,17 +719,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   pi.registerMessageRenderer<{ job?: Job; question?: string }>('agents-ask', (message, { expanded }, theme) => {
     const job = message.details?.job;
-    const heading = theme.fg('toolTitle', theme.bold(`▸ ${plain(job?.name ?? 'a subagent')} asks`))
-      + ` ${theme.fg('muted', plain(job?.subject ?? ''))}`;
-    if (!expanded) return new Text(heading, 0, 0);
-    return new Text([heading, plain(message.details?.question ?? '')].join('\n'), 1, 0);
+    const head = row(theme, { symbol: SYMBOL.attention, tone: 'warning', verb: 'AGENT', target: `${plain(job?.name ?? 'a subagent')} asks · ${plain(job?.subject ?? '')}`, meta: 'needs an answer', metaTone: 'warning' });
+    return withBody(head, expanded ? [plain(message.details?.question ?? '')] : []);
   });
 
   pi.registerMessageRenderer<{ jobs?: Job[] }>('agents-auto', (message, { expanded }, theme) => {
     const jobs = message.details?.jobs ?? [];
-    const heading = theme.fg('toolTitle', theme.bold(`▸ auto-delegated to ${jobs.length} subagent${jobs.length === 1 ? '' : 's'}`));
-    if (!expanded) return new Text(heading, 0, 0);
-    return new Text([heading, ...jobs.map(job => themedJobLine(job, theme))].join('\n'), 1, 0);
+    const head = row(theme, { symbol: SYMBOL.active, tone: 'accent', verb: 'AGENT', target: `auto-delegated to ${jobs.length} subagent${jobs.length === 1 ? '' : 's'}`, meta: jobs.map(job => plain(job.name)).join(', ') });
+    return withBody(head, expanded ? jobs.map(job => themedJobLine(job, theme)) : []);
   });
 
   pi.on('session_start', async (event: any, context: ExtensionContext) => {

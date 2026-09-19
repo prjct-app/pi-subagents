@@ -79,5 +79,8 @@
     "copy": [
       "factory"
     ]
+  },
+  "dependencies": {
+    "@prjct.app/pi-tui-kit": "^0.1.0"
   }
 }

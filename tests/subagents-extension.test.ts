@@ -47,6 +47,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
 
   const notices: string[] = [];
   const widgets: Array<string[] | undefined> = [];
+  const statuses = new Map<string, string>();
   const ctx: any = {
     cwd: options.cwd ?? '/work',
     hasUI: true,
@@ -54,7 +55,12 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     modelRegistry: { getAvailable: () => available },
     scopedModels: (options.scoped ?? []).map(value => ({ model: value })),
     isIdle: () => session.idle,
-    ui: { notify: (text: string) => { notices.push(text); }, setWidget: (_id: string, value: string[] | undefined) => { widgets.push(value); } },
+    ui: {
+      theme: { fg: (_tone: string, text: string) => text },
+      notify: (text: string) => { notices.push(text); },
+      setWidget: (_id: string, value: string[] | undefined) => { widgets.push(value); },
+      setStatus: (key: string, value: string | undefined) => { if (value === undefined) statuses.delete(key); else statuses.set(key, value); },
+    },
     sessionManager: {
       getSessionId: () => 's1',
       getBranch: () => [...entries.map(entry => ({ type: 'custom', customType: entry.customType, data: entry.data })), ...sent.map(({ message }) => ({ type: 'custom_message', ...message }))],
@@ -80,7 +86,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
   };
   return {
-    pi, tools, entries, sent, runs, renderers, ctx, session, made, notices, widgets, commands, activeTools, handlers,
+    pi, tools, entries, sent, runs, renderers, ctx, session, made, notices, widgets, commands, activeTools, handlers, statuses,
     emit,
     of: (job: Job) => runs.get(job.id)!,
     ledger: () => entries.filter(entry => entry.customType === 'agent-jobs').at(-1)?.data,
@@ -105,22 +111,23 @@ test('delegating starts a child and says plainly not to wait for it', async () =
   assert.equal(h.ledger().jobs.length, 1, 'and the ledger reaches the session file');
 });
 
-test('the widget below the editor stays while delegation is on and hides when it is off', async () => {
+test('the agents mode is on the shared mode line while delegation is on, and gone when it is off', async () => {
   const h = host();
   await h.emit('session_start', { reason: 'resume' });
-  assert.equal(h.widgets.at(-1), undefined, 'off by default: nothing below the editor');
+  assert.equal(h.statuses.has('mode:agents'), false, 'off by default: no mode');
   await h.commands.get('agents').handler('on', h.ctx);
-  assert.equal(h.widgets.at(-1)?.[0], '󰚩  Agents on  ● 0  /agents off', 'on: a fixed line even while idle');
+  assert.equal(h.statuses.get('mode:agents'), '◆ agents', 'on: shown even while idle');
   const job = (await h.delegate()).details as Job;
   h.of(job).emit({ type: 'running' });
   await settleTick();
-  assert.equal(h.widgets.at(-1)?.[0], '󰚩  Agents on  ● 1  /agents off');
+  assert.equal(h.statuses.get('mode:agents'), '◆ agents ● 1');
 
   h.of(job).emit({ type: 'settled', report: good() });
   await settleTick();
-  assert.equal(h.widgets.at(-1)?.[0], '󰚩  Agents on  ● 0  /agents off');
+  assert.equal(h.statuses.get('mode:agents'), '◆ agents');
   await h.commands.get('agents').handler('off', h.ctx);
-  assert.equal(h.widgets.at(-1), undefined);
+  assert.equal(h.statuses.has('mode:agents'), false);
+  assert.equal(h.widgets.length, 0, 'the extension draws no line of its own');
 });
 
 test('delegation is off by default: the model cannot see or call agent_delegate until /agents on', async () => {
@@ -151,7 +158,7 @@ test('/agents on survives a reload', async () => {
   again.activeTools.names = again.activeTools.names.filter(name => name !== 'agent_delegate');
   await again.emit('session_start', { reason: 'reload' });
   assert.ok(again.activeTools.names.includes('agent_delegate'));
-  assert.equal(again.widgets.at(-1)?.[0], '󰚩  Agents on  ● 0  /agents off');
+  assert.equal(again.statuses.get('mode:agents'), '◆ agents');
 });
 
 test('factory agents resolve safe roles and explicit documentation consent', async t => {

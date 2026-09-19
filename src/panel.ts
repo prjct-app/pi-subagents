@@ -171,7 +171,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     if (!job) {
       state.pageHeight = height;
       state.contentHeight = 2;
-      return [accent(theme.bold('No agents yet')), dim('Delegate a focused task; its progress will appear here.')];
+      return [theme.bold('No agents yet'), theme.fg('muted', 'Turn delegation on with /agents on, then ask for work that splits into separate tasks.')];
     }
     const status = statusOf(job);
     const detailFocus = state.focus === 'detail' ? accent(theme.bold('›')) : ' ';
@@ -212,7 +212,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       const subject = showSubject ? dim(` — ${plain(job.subject)}`) : '';
       return `${lead} ${' '.repeat(Math.min(depth, 3))}${dim(branch)} ${theme.fg(status.color, status.icon)} ${name} ${dim(`· ${status.label} ${seconds(job)}`)}${subject}`;
     });
-    return [...head, ...(body.length ? body : [dim('No matching agents.')])];
+    return [...head, ...(body.length ? body : state.query || state.filter ? [dim('No matching agents. esc clears.')] : [])];
   };
   const render = (width: number): string[] => {
     state.width = width;
@@ -238,7 +238,9 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const stats = width < 56
       ? `${accent(`●${active}`)}  ${dim(`○${queue}`)}  ${attention ? theme.fg('warning', `!${attention}`) : dim('!0')}`
       : `${accent(`● ${active} running`)}  ${dim(`○ ${queue} queued`)}  ${attention ? theme.fg('warning', `! ${attention} attention`) : dim('! 0 attention')}`;
-    const head = ` ${theme.bold('AGENTS')}  ${stats}  ${accent(filter)}`;
+    const title = ` ${accent(theme.bold('Agents'))}  ${stats}  ${theme.fg('muted', filter.toLowerCase())}`;
+    const find = state.searching || state.query ? '' : dim('/ search ');
+    const head = `${title}${' '.repeat(Math.max(2, width - visibleWidth(title) - visibleWidth(find)))}${find}`;
     const bodyHeight = Math.max(2, state.height - 4);
     const leftWidth = wide ? Math.min(34, Math.max(26, Math.floor(width * 0.3))) : Math.max(1, width - 2);
     const rightWidth = wide ? Math.max(1, width - leftWidth - 3) : Math.max(1, width - 2);
@@ -260,9 +262,14 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const hints = state.help ? narrow ? '↑↓ scroll · ?/Esc close' : 'Esc close help'
       : state.searching ? narrow ? '/ find · Enter done · Esc clear' : 'Type to filter · Enter apply · Esc cancel'
       : state.composing ? narrow ? 'Ctrl+S send · Esc save draft' : 'Enter newline · Ctrl+Enter / Ctrl+S send · Esc save draft'
-      : state.focus === 'tree' ? narrow ? '↑↓ move · Enter open · / find · Esc' : '↑↓ select · Enter open · / search · f filter · ? help · Esc close'
+      : state.focus === 'tree' ? narrow ? '↑↓ move · enter open · / find · esc' : 'enter open · s message · x stop · f filter · / search · ? keys · esc'
       : narrow ? `↑↓ ${position || 'scroll'} · s msg · Esc back` : `↑↓ scroll${position ? ` ${position}` : ''} · Tab agents · 1–3 view · s message · x stop · Esc back`;
-    const footer = state.pending ? accent(state.pending) : state.notice ? theme.fg('warning', state.notice) : dim(hints);
+    // Same grammar as every other panel: the key in accent, then what it does.
+    const keyed = (text: string): string => text.split(' · ').map(part => {
+      const match = part.match(/^(\S+(?: \/ \S+)?)(\s+.*)?$/u);
+      return match ? `${accent(match[1]!)}${dim(match[2] ?? '')}` : dim(part);
+    }).join(dim(' · '));
+    const footer = state.pending ? accent(state.pending) : state.notice ? theme.fg('warning', state.notice) : keyed(hints);
     return [fit(head, width), dim('─'.repeat(width)), ...body, dim('─'.repeat(width)), fit(` ${footer}`, width)];
   };
 
@@ -390,7 +397,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   };
 }
 
+/** Docked like every other panel: it takes the editor's place, esc gives it back. */
 export async function openAgentsPanel(ctx: ExtensionCommandContext, source: PanelSource): Promise<void> {
-  await ctx.ui.custom<null>((tui, theme, _keys, done) => agentsPanel(source, tui, theme, () => done(null)),
-    { overlay: true, overlayOptions: { width: 110, maxHeight: 24, margin: { left: 1, right: 1 } } });
+  await ctx.ui.custom<null>((tui, theme, _keys, done) => agentsPanel(source, tui, theme, () => done(null)));
 }

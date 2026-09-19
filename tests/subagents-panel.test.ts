@@ -211,7 +211,7 @@ test('history errors remain retryable, and disposal unsubscribes', async t => {
 
 test('empty state and help fit small terminals and escape returns before closing', t => {
   const h = harness([], {}, 24); t.after(() => h.panel.dispose());
-  assert.match(h.text(), /Delegate a focused task/);
+  assert.match(h.text(), /Turn delegation on with \/agents on/);
   h.panel.handleInput('?'); assert.match(h.text(80), /Enter open/);
   h.panel.handleInput('\x1b'); assert.equal(h.store.closed, 0);
   h.panel.handleInput('\x1b'); assert.equal(h.store.closed, 1);

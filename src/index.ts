@@ -62,7 +62,15 @@ export type JobsOptions = {
   ledgerWriteMs?: number;
 };
 
-/** Auto-delegation starts off; a person turns it on with /agents auto on. */
+/**
+ * Delegation starts off, like plan mode: the model does not see agent_delegate
+ * until a person types /agents on. Left on, models delegated even trivial tasks.
+ */
+const DELEGATE_TOOL_NAME = 'agent_delegate';
+const DELEGATION_OFF = 'Subagents are off in this session. Do this task yourself with your own tools. '
+  + 'Only the user can turn delegation on, with /agents on.';
+
+/** Auto-delegation needs delegation on and PI_AGENTS_AUTO=1; it has no command. */
 function autoFromEnv(): boolean {
   const raw = process.env.PI_AGENTS_AUTO?.trim().toLowerCase();
   return raw === '1' || raw === 'true';
@@ -136,10 +144,32 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     timer: undefined as ReturnType<typeof setInterval> | undefined,
     choices: [] as ModelChoice[],
     widget: undefined as string | undefined,
+    /** Whether the model may delegate at all: /agents on|off. */
+    delegation: { enabled: false },
     /** Auto-delegation: the toggle, and whether a triage call is in flight. */
     auto: { enabled: autoFromEnv(), inFlight: false },
     /** Set on shutdown: nothing admits a child into a session that is leaving. */
     closed: false,
+  };
+
+  /**
+   * Shows or hides agent_delegate to match the toggle. A hidden tool is not in
+   * the prompt at all, so the model is not tempted to hand off simple work.
+   */
+  const applyDelegation = (context?: ExtensionContext): void => {
+    try {
+      const active = pi.getActiveTools();
+      const next = state.delegation.enabled
+        ? [...new Set([...active, DELEGATE_TOOL_NAME])]
+        : active.filter(name => name !== DELEGATE_TOOL_NAME);
+      if (next.length !== active.length) pi.setActiveTools(next);
+    } catch { /* not initialized yet: session_start applies it */ }
+    showWidget(context);
+  };
+  const setDelegation = (enabled: boolean, context: ExtensionContext): void => {
+    state.delegation.enabled = enabled;
+    try { pi.appendEntry('agents-mode', { enabled }); } catch { /* the session is closing */ }
+    applyDelegation(context);
   };
 
   const ctx = (): ExtensionContext => {
@@ -301,22 +331,22 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   };
 
   /**
-   * One line above the editor while any job is live, nothing when idle. It is
-   * the same ledger the panel draws, so the two can never disagree; the 5s
-   * tick that already runs for live jobs is what keeps the times moving.
+   * One fixed line below the editor while delegation is on, nothing while it
+   * is off. It is the same ledger the panel draws, so the two can never
+   * disagree; the 5s tick that already runs for live jobs keeps it moving.
    */
-  const showWidget = (): void => {
-    const context = state.ctx;
+  const showWidget = (given?: ExtensionContext): void => {
+    const context = given ?? state.ctx;
     if (!context || !context.hasUI) return;
     const all = state.jobs?.ledger().jobs ?? [];
     const active = all.filter(job => !isTerminal(job.state) && job.state !== 'queued');
     const queued = all.filter(job => job.state === 'queued');
     const attention = all.filter(needsAttention);
     const statuses = [`● ${active.length}`, ...(queued.length ? [`○ ${queued.length}`] : []), ...(attention.length ? [`! ${attention.length}`] : [])];
-    const text = active.length ? `󰚩  Agents  ${statuses.join('  ')}  /agents` : undefined;
+    const text = state.delegation.enabled ? `󰚩  Agents on  ${statuses.join('  ')}  /agents off` : undefined;
     if (text === state.widget) return;
     state.widget = text;
-    context.ui.setWidget('agents', text === undefined ? undefined : [text]);
+    context.ui.setWidget('agents', text === undefined ? undefined : [text], { placement: 'belowEditor' });
   };
 
   /** One bounded answer from the cheapest model this session can reach. */
@@ -558,6 +588,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   registerDelegate('');
 
+  // Another extension may restore a tool list captured while delegation was on
+  // (plan mode does). Re-check before every turn, and refuse the call anyway.
+  pi.on('before_agent_start', (_event: any, context: ExtensionContext) => { applyDelegation(context); return undefined; });
+  pi.on('tool_call', (event: any) => {
+    if (event?.toolName !== DELEGATE_TOOL_NAME || state.delegation.enabled) return undefined;
+    return { block: true, reason: DELEGATION_OFF };
+  });
+
   // Real sessions spent ~11% of their prompt tokens on status calls that only
   // waited for a report; each re-sent the whole context. Reports arrive by
   // themselves and wake an idle session, so an unchanged ledger answers briefly.
@@ -665,7 +703,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
    * immediately and the triage runs beside the turn it started.
    */
   pi.on('input', (event: any, context: ExtensionContext) => {
-    if (!state.auto.enabled || state.auto.inFlight || state.closed) return undefined;
+    if (!state.delegation.enabled || !state.auto.enabled || state.auto.inFlight || state.closed) return undefined;
     if (event?.source !== 'interactive' || !worthTriaging(String(event?.text ?? ''))) return undefined;
     state.auto.inFlight = true;
     void triageAndLaunch(String(event.text), context)
@@ -710,11 +748,13 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       void cleanupExternalWorkspaces(undefined, state.settings.workspaceRetentionHours).catch(() => undefined);
     }
     // The toggle survives a reload as a session entry, like the ledger does.
-    const pref = context.sessionManager.getBranch()
-      .filter((entry: any) => entry.type === 'custom' && entry.customType === 'agents-auto').at(-1) as any;
-    if (typeof pref?.data?.enabled === 'boolean') state.auto.enabled = pref.data.enabled;
+    // Old /agents auto preferences are ignored: delegation starts off.
+    const mode = context.sessionManager.getBranch()
+      .filter((entry: any) => entry.type === 'custom' && entry.customType === 'agents-mode').at(-1) as any;
+    state.delegation.enabled = mode?.data?.enabled === true;
     state.choices = choices(context);
     registerDelegate(choiceHint(state.choices));
+    applyDelegation(context);
     const jobs = build(context.sessionManager.getSessionId());
     state.jobs = jobs;
     // Only this session's own ledger, never a fork's copy of one: a fork would
@@ -774,27 +814,13 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     limits: () => state.settings.limits,
   };
   pi.registerCommand('agents', {
-    description: 'Watch and control the subagents this session delegated; /agents auto on|off toggles auto-delegation',
+    description: 'Subagents: /agents on lets the model delegate, /agents off stops it (default), /agents opens the panel',
     getArgumentCompletions(prefix) {
-      const parts = prefix.split(/\s+/);
-      const values = parts.length === 1 ? ['auto'] : parts.length === 2 && parts[0] === 'auto' ? ['on', 'off'] : [];
-      const stem = parts.slice(0, -1).join(' ');
-      return values.filter(v => v.startsWith(parts.at(-1) ?? '')).map(v => ({ value: `${stem ? stem + ' ' : ''}${v}`, label: v }));
+      return ['on', 'off'].filter(value => value.startsWith(prefix.trim())).map(value => ({ value, label: value }));
     },
     handler: async (args, context) => {
-      const [word, value] = args.trim().split(/\s+/);
-      if (word === 'auto') {
-        if (value === 'on' || value === 'off') {
-          state.auto.enabled = value === 'on';
-          try { pi.appendEntry('agents-auto', { enabled: state.auto.enabled }); } catch { /* the session is closing */ }
-          context.ui.notify(state.auto.enabled
-            ? 'Auto-delegation on: a complex prompt launches expert subagents beside the session.'
-            : 'Auto-delegation off.', 'info');
-          return;
-        }
-        context.ui.notify(`Auto-delegation is ${state.auto.enabled ? 'on' : 'off'}. /agents auto on|off`, 'info');
-        return;
-      }
+      const word = args.trim();
+      if (word === 'on' || word === 'off') { setDelegation(word === 'on', context); return; }
       if (context.mode !== 'tui') { context.ui.notify(handle.lines().join('\n'), 'info'); return; }
       await openAgentsPanel(context, handle);
     },

@@ -28,6 +28,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   const session = { idle: true };
 
   const commands = new Map<string, any>();
+  const activeTools = { names: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'agent_delegate'] };
   const pi = {
     registerTool: (tool: any) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: any) => commands.set(name, command),
@@ -36,7 +37,8 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     registerMessageRenderer: (name: string, renderer: any) => renderers.set(name, renderer),
     appendEntry: (customType: string, data: any) => { entries.push({ customType, data }); },
     sendMessage: (message: any, given: any) => { sent.push({ message, options: given }); for (const handler of handlers.get('message_end') ?? []) handler({ message: { role: 'custom', ...message } }, ctx); },
-    getActiveTools: () => ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'],
+    getActiveTools: () => [...activeTools.names],
+    setActiveTools: (names: string[]) => { activeTools.names = [...names]; },
   } as unknown as ExtensionAPI;
 
   const model = (provider: string, id: string, input: number) =>
@@ -78,7 +80,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
   };
   return {
-    pi, tools, entries, sent, runs, renderers, ctx, session, made, notices, widgets, commands,
+    pi, tools, entries, sent, runs, renderers, ctx, session, made, notices, widgets, commands, activeTools, handlers,
     emit,
     of: (job: Job) => runs.get(job.id)!,
     ledger: () => entries.filter(entry => entry.customType === 'agent-jobs').at(-1)?.data,
@@ -103,17 +105,53 @@ test('delegating starts a child and says plainly not to wait for it', async () =
   assert.equal(h.ledger().jobs.length, 1, 'and the ledger reaches the session file');
 });
 
-test('the editor widget exists only while a subagent is running', async () => {
+test('the widget below the editor stays while delegation is on and hides when it is off', async () => {
   const h = host();
   await h.emit('session_start', { reason: 'resume' });
+  assert.equal(h.widgets.at(-1), undefined, 'off by default: nothing below the editor');
+  await h.commands.get('agents').handler('on', h.ctx);
+  assert.equal(h.widgets.at(-1)?.[0], '󰚩  Agents on  ● 0  /agents off', 'on: a fixed line even while idle');
   const job = (await h.delegate()).details as Job;
   h.of(job).emit({ type: 'running' });
   await settleTick();
-  assert.equal(h.widgets.find(widget => widget !== undefined)?.[0], '󰚩  Agents  ● 1  /agents');
+  assert.equal(h.widgets.at(-1)?.[0], '󰚩  Agents on  ● 1  /agents off');
 
-  h.of(job).emit({ type: 'settled', report: good({ outcome: 'blocked', blockers: ['Needs a decision.'] }) });
+  h.of(job).emit({ type: 'settled', report: good() });
   await settleTick();
-  assert.equal(h.widgets.at(-1), undefined, 'historical attention must not keep the widget above the editor');
+  assert.equal(h.widgets.at(-1)?.[0], '󰚩  Agents on  ● 0  /agents off');
+  await h.commands.get('agents').handler('off', h.ctx);
+  assert.equal(h.widgets.at(-1), undefined);
+});
+
+test('delegation is off by default: the model cannot see or call agent_delegate until /agents on', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'startup' });
+  assert.ok(!h.activeTools.names.includes('agent_delegate'), 'hidden from the model while off');
+  const refusal = h.handlers.get('tool_call')!.map(handler => handler({ toolName: 'agent_delegate' }, h.ctx)).find(Boolean);
+  assert.equal(refusal?.block, true, 'a call that slips through is refused');
+  assert.match(refusal.reason, /Do this task yourself/);
+  await h.commands.get('agents').handler('on', h.ctx);
+  assert.ok(h.activeTools.names.includes('agent_delegate'));
+  await h.commands.get('agents').handler('off', h.ctx);
+  assert.ok(!h.activeTools.names.includes('agent_delegate'));
+
+  // Another extension restoring an old tool list does not bring it back for a turn.
+  h.activeTools.names.push('agent_delegate');
+  await h.emit('before_agent_start');
+  assert.ok(!h.activeTools.names.includes('agent_delegate'));
+});
+
+test('/agents on survives a reload', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'startup' });
+  await h.commands.get('agents').handler('on', h.ctx);
+  // A second install over the same entries is the reload.
+  const again = host();
+  again.entries.push(...h.entries);
+  again.activeTools.names = again.activeTools.names.filter(name => name !== 'agent_delegate');
+  await again.emit('session_start', { reason: 'reload' });
+  assert.ok(again.activeTools.names.includes('agent_delegate'));
+  assert.equal(again.widgets.at(-1)?.[0], '󰚩  Agents on  ● 0  /agents off');
 });
 
 test('factory agents resolve safe roles and explicit documentation consent', async t => {
@@ -344,13 +382,17 @@ test('a session going away takes its children with it', async () => {
   assert.equal(h.of(job).stops.length, 1);
 });
 
-test('auto-delegation is off until a person turns it on, and then complex prompts launch experts', async (t) => {
+test('auto-delegation (PI_AGENTS_AUTO=1) waits for /agents on, and then complex prompts launch experts', async (t) => {
   const before = process.env.PI_SUBAGENTS_ALLOW_BASH;
+  const auto = process.env.PI_AGENTS_AUTO;
   t.after(() => {
     if (before === undefined) delete process.env.PI_SUBAGENTS_ALLOW_BASH;
     else process.env.PI_SUBAGENTS_ALLOW_BASH = before;
+    if (auto === undefined) delete process.env.PI_AGENTS_AUTO;
+    else process.env.PI_AGENTS_AUTO = auto;
   });
   delete process.env.PI_SUBAGENTS_ALLOW_BASH;
+  process.env.PI_AGENTS_AUTO = '1';
   const calls: string[] = [];
   const h = host({
     complete: async (_system, user) => {
@@ -363,14 +405,13 @@ test('auto-delegation is off until a person turns it on, and then complex prompt
   await h.emit('session_start', { reason: 'startup' });
   const prompt = `Rework how jobs settle across the store, the runner and the panel. ${'Detail. '.repeat(30)}`;
 
-  // Off by default: a complex prompt is not even triaged.
+  // Delegation is off by default: a complex prompt is not even triaged.
   await h.emit('input', { text: prompt, source: 'interactive' });
   await settleTick();
   assert.equal(calls.length, 0);
   assert.equal(h.runs.size, 0);
 
-  await h.commands.get('agents').handler('auto on', h.ctx);
-  assert.match(h.notices.at(-1) ?? '', /Auto-delegation on/);
+  await h.commands.get('agents').handler('on', h.ctx);
 
   session_idle: {
     await h.emit('input', { text: prompt, source: 'interactive' });
@@ -386,20 +427,6 @@ test('auto-delegation is off until a person turns it on, and then complex prompt
   assert.ok(told, 'the session is told what was launched');
   assert.match(told.message.content, /auto-launch 2 expert subagents/);
   assert.match(told.message.content, /Do not redo their reading/);
-  assert.ok(h.entries.some(entry => entry.customType === 'agents-auto' && entry.data.enabled === true),
-    'the toggle survives a reload');
-});
-
-test('a reload restores the auto toggle from the session', async () => {
-  const h = host();
-  await h.emit('session_start', { reason: 'startup' });
-  await h.commands.get('agents').handler('auto on', h.ctx);
-  // A second install over the same entries is the reload.
-  const again = host();
-  again.entries.push(...h.entries);
-  await again.emit('session_start', { reason: 'reload' });
-  await again.commands.get('agents').handler('auto', again.ctx);
-  assert.match(again.notices.at(-1) ?? '', /is on/);
 });
 
 test('a question from a root job reaches the session, and agent_reply steers the answer back', async () => {
@@ -449,17 +476,22 @@ test('a question from a grandchild goes to its parent job first, who answers on 
     'the session is not bothered while a live parent can answer');
 });
 
-test('a shutdown mid-triage admits no child into a session that is leaving', async () => {
+test('a shutdown mid-triage admits no child into a session that is leaving', async (t) => {
+  const auto = process.env.PI_AGENTS_AUTO;
+  t.after(() => { if (auto === undefined) delete process.env.PI_AGENTS_AUTO; else process.env.PI_AGENTS_AUTO = auto; });
+  process.env.PI_AGENTS_AUTO = '1';
   let release: (value: string) => void = () => undefined;
-  const h = host({ complete: () => new Promise<string>(resolve => { release = resolve; }) });
+  const calls = { value: 0 };
+  const h = host({ complete: () => { calls.value += 1; return new Promise<string>(resolve => { release = resolve; }); } });
   await h.emit('session_start', { reason: 'startup' });
-  await h.commands.get('agents').handler('auto on', h.ctx);
+  await h.commands.get('agents').handler('on', h.ctx);
   const prompt = `Rework the store and the runner together. ${'Detail. '.repeat(30)}`;
   await h.emit('input', { text: prompt, source: 'interactive' });
   // The triage is still in flight when the session starts closing.
   await h.emit('session_shutdown');
   release('{"complex": true, "subtasks": [{"role": "explorer", "subject": "map it", "task": "Read src/."}]}');
   await settleTick(); await settleTick();
+  assert.equal(calls.value, 1, 'the triage really was in flight');
   assert.equal(h.runs.size, 0, 'no orphan: the closed flag stopped the admission');
 });
 

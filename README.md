@@ -10,6 +10,18 @@ pi install npm:@prjct.app/pi-subagents
 Requires Pi **0.85.1–0.85.x** and Node **22.19+**. The default runner launches a
 child Pi process for each active job; a native in-process runner is opt-in.
 
+## Turn subagents on and off
+
+Subagents start **off**, like plan mode. While off, the model does not see
+`agent_delegate` and does the work itself.
+
+```text
+/agents on    # allow delegation; a fixed "Agents on" line stays below the editor
+/agents off   # stop delegation and hide the line (default)
+```
+
+The choice is kept per session and survives a reload.
+
 ## Watch and control work
 
 Open **`/agents`**. The panel stays bounded at 110 columns by 24 rows and shrinks
@@ -152,8 +164,8 @@ there is no automatic switch between runners.
 
 Environment variables remain supported:
 
-- `PI_AGENTS_AUTO=1`: opt into automatic triage of complex typed prompts. Default
-  off; toggle per session with `/agents auto on|off`. Automatic roles remain readers.
+- `PI_AGENTS_AUTO=1`: opt into automatic triage of complex typed prompts. It runs
+  only while `/agents on` is active. Automatic roles remain readers.
 - `PI_SUBAGENTS_ALLOW_BASH=1`: enable unrestricted Bash for writable workers.
 - `PI_SUBAGENTS_PI_COMMAND`: override child Pi invocation for the process runner.
 - `PI_CODING_AGENT_DIR`: Pi agent home, used for configuration and model credentials.

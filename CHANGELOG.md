@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Subagents are now off by default, like plan mode. While off, the model does not see `agent_delegate`, and a call that slips through is refused with "do this task yourself". `/agents on` allows delegation and keeps a fixed `Agents on` line below the editor. `/agents off` hides both, and `/agents` opens the panel. The choice survives a reload. `/agents auto on|off` is removed; `PI_AGENTS_AUTO=1` triages only while delegation is on.
 - Add `npm run build:pi`: a compiled local build in `~/.pi/agent/builds/<package>` that Pi loads instead of the TypeScript sources.
 - Coalesce `agent-jobs` ledger snapshots into one write per second (settled jobs are written at once) and stop repeating delivered reports in them; reload restores reports from their `agent-job` entries. Sessions had accumulated 47MB of snapshots in three days.
 - Answer an unchanged `agent_jobs` status check in one line and tell the model not to poll: reports already arrive and wake an idle session. Status-only polling was ~11% of prompt tokens in real sessions.

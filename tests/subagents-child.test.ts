@@ -114,6 +114,8 @@ test('a child only has a way to ask for a child where its parent allowed one', (
   const middle = fakePi();
   installGuard(middle.pi, DELEGATOR);
   assert.equal(middle.tools.has(DELEGATE_TOOL), true);
+  assert.deepEqual(middle.tools.get(DELEGATE_TOOL).parameters.required.sort(), ['agent', 'subject', 'task']);
+  assert.equal(middle.tools.get(DELEGATE_TOOL).parameters.properties.role, undefined);
   assert.equal(middle.call({ toolName: DELEGATE_TOOL, input: {} }, '/work'), undefined);
 });
 
@@ -130,7 +132,7 @@ test('delegating asks the parent, and returns what the parent actually said', as
     },
   };
 
-  const ask = { kind: 'delegate', role: 'explorer', subject: 'map it', task: 'Map src/.' };
+  const ask = { kind: 'delegate', agent: 'explorer', subject: 'map it', task: 'Map src/.' };
   const result = await tools.get(DELEGATE_TOOL).execute('call_1', ask, undefined, undefined, ctx);
   assert.equal(asked[0], `${ASK_PREFIX}${JSON.stringify(ask)}`, 'the parent is asked, in words it can parse');
   assert.equal(result.content[0].text, 'This tree has spent its 4 delegations.',

@@ -366,7 +366,7 @@ export function spawnRunner(options: {
         return { ok: false, text: 'Delegation is not available from here. Report what you found and what you could not reach.' };
       }
       if (!checkAsk(ask)) {
-        return { ok: false, text: 'That request was not understood, so nothing was started. It needs a role, a subject and a task.' };
+        return { ok: false, text: 'That request was not understood, so nothing was started. It needs an agent, a subject and a task.' };
       }
       // A refusal from the parent is an answer, never an exception the child
       // has to interpret from a broken dialog.

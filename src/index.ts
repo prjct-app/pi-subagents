@@ -12,7 +12,7 @@ import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
 import { DEFAULT_LIMITS, find, live, undelivered, unresolved } from './manager.ts';
-import { needsAttention, jobView, ledgerLines, ledgerView, resultContent, themedJobLine, withBody } from './render.ts';
+import { delegateResultView, needsAttention, jobView, ledgerLines, ledgerView, resultContent, themedJobLine, withBody } from './render.ts';
 import { getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
@@ -21,7 +21,7 @@ import { selectSpecificationTopics } from './checklist.ts';
 import { FACTORY_AGENTS, factoryAgent, factoryCatalogue, type FactoryAgent } from './factory.ts';
 import { cleanupExternalWorkspaces, createExternalWorkspace, discardExternalWorkspace, finalizeExternalWorkspace, type ExternalWorkspace } from './workspace.ts';
 import { spawnRunner } from './runner.ts';
-import { READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger, type Role } from './schema.ts';
+import { DELEGATE_AGENTS, READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger, type Role } from './schema.ts';
 
 /**
  * pi-subagents: ephemeral subagents a session delegates to, usable on their
@@ -215,11 +215,16 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write'];
     return available.filter(tool => safe.includes(tool) && (role === 'worker' || (READ_ONLY_TOOLS as readonly string[]).includes(tool)));
   };
-  const resolveProfile = (agent?: string, role?: Role): { role: Role; profile?: FactoryAgent } => {
-    if (agent && role) throw new Error('Choose either a factory agent or a base role, not both.');
-    if (agent) { const profile = factoryAgent(agent); return { role: profile.role, profile }; }
-    if (role) return { role };
-    throw new Error(`Choose an agent (${FACTORY_AGENTS.join(', ')}) or a base role (${ROLES.join(', ')}).`);
+  const resolveProfile = (agent?: string, legacyRole?: Role): { role: Role; profile?: FactoryAgent } => {
+    // agent is the sole public selector. role is accepted only so calls emitted
+    // by an older schema (including already-running children) keep working.
+    // If an old caller sent both, agent is authoritative instead of turning a
+    // harmless redundant field into a failed job and a retry loop.
+    const selected = agent ?? legacyRole;
+    if (!selected) throw new Error(`Choose an agent: ${DELEGATE_AGENTS.join(', ')}.`);
+    if ((ROLES as readonly string[]).includes(selected)) return { role: selected as Role };
+    const profile = factoryAgent(selected);
+    return { role: profile.role, profile };
   };
   const externalWorkspace = async (profile: FactoryAgent | undefined, source: string): Promise<ExternalWorkspace | undefined> =>
     profile?.workspace === 'isolated' ? createExternalWorkspace(source, options.workspaceRoot) : undefined;
@@ -525,13 +530,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     pi.registerTool({
       name: 'agent_delegate',
       label: 'Delegate a job',
-      description: 'Start one separable job with either a package-owned factory agent or a base role. Factory implementers and documenters '
+      description: 'Start one separable job. Set agent to either a package-owned factory profile or a base role. Factory implementers and documenters '
         + 'write only in external snapshots under ~/.prjct/subagents; documentation requires an explicit user request. Factory agents never inherit Bash or third-party mutation tools. '
         + 'Base explorer and reviewer roles are read-only. A legacy worker may inherit active write tools and opt-in unrestricted Bash. The job reports evidence and ends; do not wait for it. '
         + `Factory agents:\n${factoryCatalogue()}\n${hint}`,
       parameters: Type.Object({
-        agent: Type.Optional(StringEnum(FACTORY_AGENTS)),
-        role: Type.Optional(StringEnum(ROLES)),
+        agent: StringEnum(DELEGATE_AGENTS, {
+          description: 'The one delegation selector: a factory profile or a base role such as reviewer. Never send a separate role field.',
+        }),
         requestedByUser: Type.Optional(Type.Boolean({ description: 'True only when the user explicitly requested product documentation.' })),
         subject: Type.String({ minLength: 1, maxLength: 160 }),
         task: Type.String({ minLength: 1, maxLength: 24000 }),
@@ -590,7 +596,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         if (context?.isPartial === false) return new Container();
         return row(theme, { symbol: SYMBOL.active, tone: 'accent', verb: 'AGENT', target: `${plain(String(args?.agent ?? args?.role ?? 'worker'))} · ${plain(String(args?.subject ?? ''))}`, meta: 'starting…' });
       },
-      renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return jobView(result?.details, expanded, theme); },
+      renderResult(result: any, { expanded }: { expanded: boolean }, theme: any) { return delegateResultView(result, expanded, theme); },
     } as Parameters<ExtensionAPI['registerTool']>[0]);
   };
 

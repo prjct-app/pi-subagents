@@ -78,16 +78,17 @@ test('only as many children run at once as the session allows', () => {
   const c = accept(b.ledger);
   assert.equal(c.ledger.jobs.length, 3);
 
-  const ready = startable(c.ledger);
-  assert.equal(ready.length, DEFAULT_LIMITS.concurrency, 'the third waits its turn');
+  const throttled = { ...DEFAULT_LIMITS, concurrency: 2 };
+  const ready = startable(c.ledger, throttled);
+  assert.equal(ready.length, throttled.concurrency, 'an explicit throttle queues the third');
   assert.deepEqual(ready.map(job => job.id), [a.job.id, b.job.id], 'oldest first');
 
   const two = ready.reduce((ledger, job) => running(starting(ledger, job.id, NOW), job.id), c.ledger);
   assert.equal(busy(two).length, 2);
-  assert.equal(startable(two).length, 0, 'no room while both are live');
+  assert.equal(startable(two, throttled).length, 0, 'no room while both are live');
 
   const one = settle(two, a.job.id, { kind: 'reported', report: good() }, NOW + 100);
-  assert.deepEqual(startable(one).map(job => job.id), [c.job.id], 'a slot frees as one settles');
+  assert.deepEqual(startable(one, throttled).map(job => job.id), [c.job.id], 'a slot frees as one settles');
 });
 
 test('a report decides the outcome only after it validates', () => {

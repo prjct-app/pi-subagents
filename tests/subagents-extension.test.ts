@@ -46,7 +46,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   const available = options.models ?? [model('openai-codex', 'gpt-5.4-mini', 0.25), model('anthropic', 'claude-opus-4-5', 5)];
 
   const notices: string[] = [];
-  const widgets: Array<string[] | undefined> = [];
+  const widgets: Array<{ id: string; value: unknown }> = [];
   const statuses = new Map<string, string>();
   const ctx: any = {
     cwd: options.cwd ?? '/work',
@@ -58,7 +58,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     ui: {
       theme: { fg: (_tone: string, text: string) => text },
       notify: (text: string) => { notices.push(text); },
-      setWidget: (_id: string, value: string[] | undefined) => { widgets.push(value); },
+      setWidget: (id: string, value: unknown) => { widgets.push({ id, value }); },
       setStatus: (key: string, value: string | undefined) => { if (value === undefined) statuses.delete(key); else statuses.set(key, value); },
     },
     sessionManager: {
@@ -90,10 +90,12 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     emit,
     of: (job: Job) => runs.get(job.id)!,
     ledger: () => entries.filter(entry => entry.customType === 'agent-jobs').at(-1)?.data,
-    delegate: (args: Record<string, unknown> = {}, id = `call_${runs.size + 1}`) =>
-      tools.get('agent_delegate').execute(id, {
-        role: 'reviewer', subject: 'review the importer', task: 'Read src/importer.ts.', ...args,
-      }),
+    delegate: (args: Record<string, unknown> = {}, id = `call_${runs.size + 1}`) => {
+      const selector = args.agent === undefined && args.role === undefined ? { agent: 'reviewer' } : {};
+      return tools.get('agent_delegate').execute(id, {
+        ...selector, subject: 'review the importer', task: 'Read src/importer.ts.', ...args,
+      });
+    },
   };
 }
 
@@ -107,8 +109,37 @@ test('delegating starts a child and says plainly not to wait for it', async () =
   assert.equal(h.runs.size, 1);
   assert.match(result.content[0].text, /is on "review the importer", using anthropic\/claude-opus-4-5/);
   assert.match(result.content[0].text, /do not wait for it/);
-  assert.equal(result.details.state, 'queued');
+  assert.equal(result.details.state, 'starting', 'the tool returns the entity state after its runner starts');
   assert.equal(h.ledger().jobs.length, 1, 'and the ledger reaches the session file');
+});
+
+test('agent_delegate has one required selector and tolerates calls from the old two-field schema', async () => {
+  const h = host(); await h.emit('session_start', { reason: 'resume' });
+  const schema = h.tools.get('agent_delegate').parameters;
+  assert.deepEqual(schema.required.sort(), ['agent', 'subject', 'task']);
+  assert.equal(schema.properties.role, undefined, 'the model is not offered a second conflicting selector');
+  assert.ok(schema.properties.agent.enum.includes('reviewer'));
+  assert.ok(schema.properties.agent.enum.includes('implementer'));
+
+  const current = (await h.delegate()).details as Job;
+  assert.equal(current.role, 'reviewer');
+  const legacy = (await h.tools.get('agent_delegate').execute('legacy', {
+    agent: 'bug-triager', role: 'worker', subject: 'Triage it', task: 'Find the cause.',
+  })).details as Job;
+  assert.equal(legacy.agent, 'bug-triager', 'the current selector wins over a stale redundant role');
+  assert.equal(legacy.role, 'explorer');
+});
+
+test('a rejected delegation renders as a failure, never Job unavailable', async () => {
+  const h = host();
+  const theme: any = { fg: (_tone: string, text: string) => text, bold: (text: string) => text };
+  const view = h.tools.get('agent_delegate').renderResult({
+    content: [{ type: 'text', text: 'Unknown factory agent.' }],
+  }, { expanded: true }, theme);
+  const rendered = view.render(100).join('\n');
+  assert.match(rendered, /delegation failed/);
+  assert.match(rendered, /Unknown factory agent/);
+  assert.doesNotMatch(rendered, /Job unavailable/);
 });
 
 test('the agents mode is on the shared mode line while delegation is on, and gone when it is off', async () => {
@@ -127,7 +158,8 @@ test('the agents mode is on the shared mode line while delegation is on, and gon
   assert.equal(h.statuses.get('mode:agents'), '◆ agents');
   await h.commands.get('agents').handler('off', h.ctx);
   assert.equal(h.statuses.has('mode:agents'), false);
-  assert.equal(h.widgets.length, 0, 'the extension draws no line of its own');
+  assert.ok(h.widgets.every(widget => widget.id === 'prjct-modes'), 'only the shared mode line is touched');
+  assert.equal(h.widgets.at(-1)?.value, undefined, 'the shared line is removed when its last mode turns off');
 });
 
 test('delegation is off by default: the model cannot see or call agent_delegate until /agents on', async () => {

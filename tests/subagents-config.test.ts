@@ -25,6 +25,12 @@ test('layered settings validate every field and preserve lower-layer values', as
   assert.deepEqual(loadSettings('/nonexistent', '/nonexistent', () => {}), defaultSettings());
 });
 
+test('default capacity starts the entire session budget in parallel', () => {
+  const settings = defaultSettings();
+  assert.equal(settings.limits.concurrency, settings.limits.jobs,
+    'raising the session budget must not silently reintroduce a default queue');
+});
+
 test('readers cannot gain mutation, shell or unknown extension capabilities', () => {
   const active = ['read', 'grep', 'edit', 'write', 'bash', 'remote_mutation', 'agent_reply', 'subagent_send'];
   assert.deepEqual(roleTools('reviewer', active, true), ['read', 'grep']);

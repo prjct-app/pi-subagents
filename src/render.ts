@@ -125,6 +125,17 @@ export function jobView(job: Job | undefined, expanded: boolean, theme?: Theme) 
   return withBody(jobRow(job, theme), expanded ? [...reportLines(job), ...(job.patchFile ? [`External patch: ${plain(job.patchFile)}`] : [])] : []);
 }
 
+/** A rejected tool call has no Job details; render the rejection instead of pretending a job vanished. */
+export function delegateResultView(result: any, expanded: boolean, theme?: Theme): Component {
+  if (result?.details && typeof result.details.subject === 'string') return jobView(result.details, expanded, theme);
+  const message = Array.isArray(result?.content)
+    ? result.content.filter((part: any) => part?.type === 'text').map((part: any) => plain(part.text)).join('\n').trim()
+    : '';
+  if (!theme) return new Text(message || 'Delegation failed.', 0, 0);
+  const head = row(theme, { symbol: SYMBOL.error, tone: 'error', verb: 'AGENT', target: 'delegation failed' });
+  return withBody(head, expanded && message ? [message] : []);
+}
+
 export function ledgerView(ledger: Ledger | undefined, expanded: boolean, theme?: Theme) {
   const jobs = ledger?.jobs ?? [];
   const open = jobs.filter(job => job.state === 'running' || job.state === 'starting' || job.state === 'queued').length;

@@ -179,7 +179,10 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
       if (!decision.ok || decision.repeated) return decision;
       commit(decision.ledger);
       await pump();
-      return { ...decision, ledger: store.ledger };
+      // Admission creates a transient queued record so two pumps cannot race.
+      // Return the current record after pumping; otherwise the caller renders
+      // "queued" even though this entity already owns a runner.
+      return { ...decision, job: find(store.ledger, decision.job.id) ?? decision.job, ledger: store.ledger };
     },
 
     async cancel(jobId, reason) {

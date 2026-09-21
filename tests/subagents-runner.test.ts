@@ -430,7 +430,7 @@ test('a child that asks for a child gets its parent’s real answer', async () =
 
   child.say({
     type: 'extension_ui_request', id: 'dialog-1', method: 'input',
-    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'delegate', role: 'explorer', subject: 'map it', task: 'Map src/.' })}`,
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'delegate', agent: 'explorer', subject: 'map it', task: 'Map src/.' })}`,
   });
   await until('the parent answers', () => replies(child).length > 0);
 
@@ -445,7 +445,7 @@ test('a refusal reaches the child as an answer, never as a broken dialog', async
   const { child } = await delegating({ depth: 0 }, async () => { throw new Error('the ledger is full'); });
   child.say({
     type: 'extension_ui_request', id: 'dialog-2', method: 'input',
-    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'delegate', role: 'explorer', subject: 'map it', task: 'Map src/.' })}`,
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'delegate', agent: 'explorer', subject: 'map it', task: 'Map src/.' })}`,
   });
   await until('the parent answers', () => replies(child).length > 0);
   assert.equal(JSON.parse(replies(child)[0].value).ok, false);

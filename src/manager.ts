@@ -79,7 +79,12 @@ export const settled = (ledger: Ledger): Job[] => ledger.jobs.filter(job => isTe
 export const undelivered = (ledger: Ledger): Job[] => settled(ledger).filter(job => !job.delivered);
 /** Work the parent still owns: a blocker is unresolved even though the job ended. */
 export const unresolved = (ledger: Ledger): Job[] =>
-  ledger.jobs.filter(job => !isTerminal(job.state) || (!job.continuedBy && (job.report?.blockers?.length ?? 0) > 0));
+  ledger.jobs.filter(job => !isTerminal(job.state) || (!job.continuedBy && !job.resolved && (job.report?.blockers?.length ?? 0) > 0));
+
+/** Mark what a finished job reported as blocked as handled. Live jobs are left alone. */
+export function resolve(ledger: Ledger, jobId: string, now: number): Ledger {
+  return { ...ledger, jobs: ledger.jobs.map(job => job.id === jobId && isTerminal(job.state) ? { ...job, resolved: now } : job) };
+}
 export const find = (ledger: Ledger, jobId: string): Job | undefined => ledger.jobs.find(job => job.id === jobId);
 
 /**

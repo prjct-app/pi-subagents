@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { performance } from 'node:perf_hooks';
 import { CURSOR_MARKER, visibleWidth } from '@earendil-works/pi-tui';
-import { agentsPanel, rows, type PanelSource } from '../src/panel.ts';
+import { agentsPanel, CONTINUE_MESSAGE, rows, type PanelSource } from '../src/panel.ts';
 import { statusOf } from '../src/render.ts';
 import { newJobId, type Job, type Ledger } from '../src/schema.ts';
 import type { Activity } from '../src/activity.ts';
@@ -257,8 +257,9 @@ test('p opens a purge chooser by status, asks once more, and purges only that gr
   assert.match(chooser, /Failed {2}1/);
   assert.match(chooser, /Cancelled {2}0 · 1 kept/, 'an undelivered report is never purged');
   assert.doesNotMatch(chooser, /Interrupted/, 'empty groups are not offered');
-  // Choose "Timed out": All finished, Completed, Failed, Timed out.
-  for (const _ of [1, 2, 3]) h.panel.handleInput('\x1b[B');
+  assert.match(chooser, /Needs attention {2}4/, 'failed and timed-out agents need attention');
+  // Choose "Timed out": All finished, Needs attention, Completed, Failed, Timed out.
+  for (const _ of [1, 2, 3, 4]) h.panel.handleInput('\x1b[B');
   h.panel.handleInput('\r');
   assert.match(h.text(), /Purge 3 timed out agents\? enter confirm/);
   assert.equal(purged.length, 0, 'nothing goes before the second Enter');
@@ -278,4 +279,35 @@ test('esc leaves the purge chooser without purging', t => {
   h.panel.handleInput('\x1b');
   assert.doesNotMatch(h.text(), /Purge finished agents/);
   assert.deepEqual(purged, []);
+});
+
+test('an agent that needs attention opens on its blockers and offers answer and resolve', async t => {
+  const blocked = job({ name: 'Imani', state: 'completed', settled: Date.now(), delivered: Date.now(), sessionFile: '/tmp/imani.jsonl',
+    report: { outcome: 'completed', summary: 'Audit done.', criteria: [], findings: [], blockers: ['No access to Search Console.'] } as any });
+  const resumed: [string, string][] = [];
+  const resolved: string[] = [];
+  const h = harness([blocked], {
+    resume: async (id, message) => { resumed.push([id, message]); return job({ id: 'j_next', name: 'Imani' }); },
+    resolve: id => { resolved.push(id); h.store.jobs = h.store.jobs.map(item => item.id === id ? { ...item, resolved: Date.now() } : item); return true; },
+  });
+  t.after(() => h.panel.dispose());
+  const first = h.text();
+  assert.match(first, /\[2 Result\]/, 'a finished agent opens on its report');
+  assert.match(first, /NEEDS ATTENTION/);
+  assert.match(first, /No access to Search Console/);
+  assert.match(first, /r answer · a resolve/, 'the keys are in the footer, not only in the help');
+
+  h.panel.handleInput('r');
+  const composing = h.text();
+  assert.match(composing, /ANSWER \/ CONTINUE/);
+  assert.match(composing, /BLOCKED ON/);
+  assert.match(composing, /No access to Search Console/);
+  h.panel.handleInput('\x13'); // Ctrl+S with nothing typed
+  await tick(); await tick();
+  assert.deepEqual(resumed, [[blocked.id, CONTINUE_MESSAGE]], 'an empty answer means: carry on');
+
+  h.panel.handleInput('\x1b');
+  h.panel.handleInput('a');
+  assert.deepEqual(resolved, [blocked.id]);
+  assert.match(h.text(), /Resolved/);
 });

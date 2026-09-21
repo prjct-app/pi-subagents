@@ -22,11 +22,14 @@ export type PanelSource = {
   setDelegation?: (enabled: boolean) => void;
   /** Forget the named finished jobs that qualify; returns what went. */
   purge?: (jobIds: readonly string[]) => Job[];
+  /** Mark a finished job's blockers as handled. */
+  resolve?: (jobId: string) => boolean;
 };
 
 /** What the purge chooser offers, by status. "All finished" is always first. */
-export const PURGE_GROUPS: readonly { label: string; states: readonly JobState[] }[] = [
+export const PURGE_GROUPS: readonly { label: string; states: readonly JobState[]; only?: (job: Job) => boolean }[] = [
   { label: 'All finished', states: TERMINAL },
+  { label: 'Needs attention', states: TERMINAL, only: needsAttention },
   { label: 'Completed', states: ['completed'] },
   { label: 'Failed', states: ['failed'] },
   { label: 'Timed out', states: ['timed_out'] },
@@ -42,7 +45,7 @@ export const PURGE_GROUPS: readonly { label: string; states: readonly JobState[]
 export function purgeChoices(ledger: Ledger | undefined): { label: string; total: number; ids: string[] }[] {
   const jobs = ledger?.jobs ?? [];
   return PURGE_GROUPS.map(group => {
-    const members = jobs.filter(job => group.states.includes(job.state));
+    const members = jobs.filter(job => group.states.includes(job.state) && (group.only?.(job) ?? true));
     const ids = ledger ? purgeable(ledger, members.map(job => job.id)).map(job => job.id) : [];
     return { label: group.label, total: members.length, ids };
   }).filter((choice, index) => index === 0 || choice.total > 0);
@@ -62,6 +65,8 @@ export function rows(ledger: Ledger | undefined): { job: Job; depth: number }[] 
 
 type History = { entries: TranscriptEntry[]; before?: number; next?: number; size: number; more: boolean; reading: boolean; final?: boolean; error?: string };
 const MAX_DRAFT = 4000;
+/** What an empty answer means: carry on, and close out what cannot be unblocked. */
+export const CONTINUE_MESSAGE = 'Continue with your best judgement. Work around the blockers you reported where you can; for any that remain, say exactly what is still missing and return a new report.';
 const safeDraft = (text: string): string => plain(text).replace(/\r\n?/g, '\n');
 
 export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: () => void): Component & Focusable & { dispose(): void; handleInput(data: string): void; choosePurge(): void } {
@@ -106,7 +111,10 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   };
   const selected = (): Job | undefined => {
     const list = visible();
-    if (!list.some(row => row.job.id === state.selected)) state.selected = list[0]?.job.id;
+    if (!list.some(row => row.job.id === state.selected)) {
+      state.selected = list[0]?.job.id;
+      if (list[0]) state.tab = isTerminal(list[0].job.state) ? 1 : 0;
+    }
     return list.find(row => row.job.id === state.selected)?.job;
   };
   const resetView = (): void => { state.scroll = 0; state.follow = true; state.history = false; state.notice = ''; state.confirmStop = ''; };
@@ -174,10 +182,12 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   const report = (job: Job, width: number): string[] => {
     const value = job.report;
     if (!value) return [dim(isTerminal(job.state) ? job.reason ?? 'No report was returned.' : 'The report will appear when this agent finishes.'), ...paragraphs(job.question ?? '', width)];
-    return [accent(theme.bold('SUMMARY')), ...paragraphs(value.summary, width),
+    // What blocked it comes first: it is the reason this agent is in front of you.
+    const blockers = value.blockers.length && !job.resolved ? [theme.fg('warning', theme.bold('NEEDS ATTENTION')), ...value.blockers.flatMap(text => paragraphs(text, width)), ''] : [];
+    return [...blockers, accent(theme.bold('SUMMARY')), ...paragraphs(value.summary, width),
       ...(value.criteria.length ? ['', accent(theme.bold('CRITERIA')), ...value.criteria.flatMap(item => [theme.fg(item.met === 'yes' ? 'success' : 'warning', `${item.met === 'yes' ? '✓' : item.met === 'no' ? '×' : '?'} ${plain(item.criterion)}`), ...paragraphs(item.evidence, width).map(dim)])] : []),
       ...(value.findings.length ? ['', accent(theme.bold('FINDINGS')), ...value.findings.flatMap(item => [...paragraphs(item.detail, width), ...(item.file ? [dim(`${plain(item.file)}${item.line ? `:${item.line}` : ''}`)] : [])])] : []),
-      ...(value.blockers.length ? ['', theme.fg('warning', theme.bold('NEEDS ATTENTION')), ...value.blockers.flatMap(text => paragraphs(text, width))] : [])];
+      ...(value.blockers.length && job.resolved ? ['', dim(theme.bold('BLOCKERS (resolved)')), ...value.blockers.flatMap(text => paragraphs(text, width)).map(dim)] : [])];
   };
   const activityLines = (job: Job, width: number): string[] => {
     const activity = state.history ? [] : source.activity?.(job.id) ?? [];
@@ -211,8 +221,13 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     if (state.composing) {
       state.pageHeight = 0;
       state.contentHeight = 0;
-      const label = `${state.composing === 'resume' ? 'CONTINUE' : 'MESSAGE'} ${accent(theme.bold(job.name))} ${dim(`· ${editor.getExpandedText().length}/${MAX_DRAFT}`)}`;
-      return [label, ...editor.render(width)].slice(0, height);
+      const label = `${state.composing === 'resume' ? 'ANSWER / CONTINUE' : 'MESSAGE'} ${accent(theme.bold(job.name))} ${dim(`· ${editor.getExpandedText().length}/${MAX_DRAFT}`)}`;
+      const asks = state.composing === 'resume' ? [...(job.question ? [job.question] : []), ...(job.report?.blockers ?? [])] : [];
+      const context = asks.length
+        ? [theme.fg('warning', theme.bold('BLOCKED ON')), ...asks.slice(0, 3).flatMap(text => paragraphs(`- ${text}`, width).slice(0, 2)), dim('Empty send: continue with its best judgement.')]
+        : state.composing === 'resume' ? [dim('Empty send: continue with its best judgement.')] : [];
+      const editorLines = editor.render(width);
+      return [label, ...context.slice(0, Math.max(0, height - 1 - Math.min(editorLines.length, 5))), ...editorLines].slice(0, height);
     }
     const tabs = ['Activity', 'Result', 'Details'].map((tab, index) => index === state.tab ? accent(theme.bold(`[${index + 1} ${tab}]`)) : dim(`${index + 1} ${tab}`)).join('  ');
     const header = [identity, title, tabs];
@@ -245,6 +260,16 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     });
     return [...head, ...(body.length ? body : state.query || state.filter ? [dim('No matching agents. esc clears.')] : [])];
   };
+  /** The keys that make sense for this agent right now, so none of them hides in the help. */
+  const jobKeys = (job: Job | undefined, narrow: boolean): string => {
+    if (!job) return narrow ? 'o on/off' : 's message';
+    if (!isTerminal(job.state)) return narrow ? 's msg · x stop' : 's message · x stop';
+    const keys = [
+      ...(source.resume && job.sessionFile && !job.continuedBy ? [needsAttention(job) ? 'r answer' : 'r continue'] : []),
+      ...(source.resolve && needsAttention(job) ? ['a resolve'] : []),
+    ];
+    return keys.length ? keys.join(' · ') : narrow ? '2 result' : '2 result';
+  };
   const render = (width: number): string[] => {
     state.width = width;
     const all = source.ledger()?.jobs ?? [];
@@ -254,7 +279,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const compactTreeHeight = all.length + 4 + (state.searching || state.query ? 1 : 0);
     const draftWidth = Math.max(1, width - 4);
     const draftRows = editor.getExpandedText().split('\n').reduce((count, line) => count + Math.max(1, Math.ceil(visibleWidth(line) / draftWidth)), 0);
-    const composeHeight = 7 + Math.min(5, draftRows);
+    const composeHeight = 7 + Math.min(5, draftRows) + (state.composing === 'resume' ? 5 : 0);
     const preferredHeight = state.help ? (width < 56 ? 12 : 11) : state.composing ? composeHeight
       : !wide && state.focus === 'tree' ? Math.max(8, Math.min(24, compactTreeHeight))
       : wide ? Math.max(12, Math.min(24, all.length + 10)) : 14;
@@ -281,8 +306,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const left = tree(leftWidth, bodyHeight, !wide && rightWidth >= 56);
     const right = detail(job, rightWidth, bodyHeight);
     const help = width < 56
-      ? ['↑↓/jk  move / scroll', 'Enter  open selected', 'Tab  agents / detail', '1/2/3  switch view', '/ search · f filter', 's message · r continue', 'x x stop · h history · t tools', 'Esc  back / close']
-      : ['↑↓ / j k  move or scroll · Enter open · Tab switch pane', '1 / 2 / 3  activity, result, details', '/ search · f filter agents', 's message · r continue · x x stop · p purge', 'h retained history · t expand tool output', 'PgUp / PgDn page · Home top · End follow', 'Esc back or close · ? toggle help'];
+      ? ['↑↓/jk  move / scroll', 'Enter  open selected', 'Tab  agents / detail', '1/2/3  switch view', '/ search · f filter', 's msg · r answer · a resolve', 'x x stop · h history · t tools', 'Esc  back / close']
+      : ['↑↓ / j k  move or scroll · Enter open · Tab switch pane', '1 / 2 / 3  activity, result, details', '/ search · f filter agents', 's message · r answer/continue · a resolve · x x stop · p purge', 'h retained history · t expand tool output', 'PgUp / PgDn page · Home top · End follow', 'Esc back or close · ? toggle help'];
     const choices = state.purging === undefined ? [] : purgeChoices(source.ledger());
     const chooser = state.purging === undefined ? [] : [
       theme.bold('Purge finished agents'),
@@ -310,8 +335,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       : state.purging !== undefined ? narrow ? '↑↓ choose · enter purge · esc' : '↑↓ choose · enter purge · esc cancel'
       : state.searching ? narrow ? '/ find · Enter done · Esc clear' : 'Type to filter · Enter apply · Esc cancel'
       : state.composing ? narrow ? 'Ctrl+S send · Esc save draft' : 'Enter newline · Ctrl+Enter / Ctrl+S send · Esc save draft'
-      : state.focus === 'tree' ? narrow ? '↑↓ move · enter open · o on/off · esc' : `enter open · o ${source.delegation?.() ? 'turn off' : 'turn on'} · s message · x stop · p purge · f filter · / search · ? keys · esc`
-      : narrow ? `↑↓ ${position || 'scroll'} · s msg · Esc back` : `↑↓ scroll${position ? ` ${position}` : ''} · Tab agents · 1–3 view · s message · x stop · Esc back`;
+      : state.focus === 'tree' ? narrow ? `↑↓ move · enter open · ${jobKeys(job, true)} · esc` : `enter open · ${jobKeys(job, false)} · o ${source.delegation?.() ? 'turn off' : 'turn on'} · p purge · f filter · / search · ? keys · esc`
+      : narrow ? `↑↓ ${position || 'scroll'} · ${jobKeys(job, true)} · Esc back` : `↑↓ scroll${position ? ` ${position}` : ''} · Tab agents · 1–3 view · ${jobKeys(job, false)} · Esc back`;
     // Same grammar as every other panel: the key in accent, then what it does.
     const keyed = (text: string): string => text.split(' · ').map(part => {
       const match = part.match(/^(\S+(?: \/ \S+)?)(\s+.*)?$/u);
@@ -340,7 +365,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   const send = (): void => {
     const job = selected();
     const mode = state.composing;
-    const text = safeDraft(editor.getExpandedText()).trim();
+    const typed = safeDraft(editor.getExpandedText()).trim();
+    const text = typed || (mode === 'resume' ? CONTINUE_MESSAGE : '');
     if (!job || !mode || state.pending || !text) return;
     if (text.length > MAX_DRAFT) { state.notice = 'Message exceeds 4,000 characters. Shorten it before sending.'; return; }
     state.pending = `${mode === 'resume' ? 'Continuing' : 'Sending to'} ${job.name}…`;
@@ -416,6 +442,11 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     else if (data === '/') { state.searching = true; search.focused = true; search.setValue(state.query); }
     else if (data === 'f') { state.filter = (state.filter + 1) % 3; resetView(); }
     else if (data === 'p' && source.purge) { state.purging = 0; state.confirmPurge = false; state.notice = ''; }
+    else if (data === 'a' && job && source.resolve && !state.pending) {
+      if (!isTerminal(job.state)) state.notice = `${job.name} is still working; send it a message instead.`;
+      else if (!needsAttention(job)) state.notice = `${job.name} does not need attention.`;
+      else state.notice = source.resolve(job.id) ? `${job.name} marked resolved.` : `${job.name} could not be marked resolved.`;
+    }
     else if (data === 'o' && source.setDelegation && source.delegation) {
       const next = !source.delegation();
       source.setDelegation(next);
@@ -453,7 +484,10 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       if (state.focus === 'tree' && !page) {
         const list = visible();
         const index = list.findIndex(row => row.job.id === job?.id);
-        state.selected = list[Math.max(0, Math.min(list.length - 1, index + (up ? -1 : 1)))]?.job.id;
+        const next = list[Math.max(0, Math.min(list.length - 1, index + (up ? -1 : 1)))]?.job;
+        state.selected = next?.id;
+        // A finished agent's story is its report (and what blocked it), not its last state change.
+        if (next && next.id !== job?.id) state.tab = isTerminal(next.state) ? 1 : 0;
         resetView();
       } else {
         state.focus = 'detail'; state.follow = false;

@@ -401,6 +401,17 @@ test('status lists job ids, and purge forgets a finished job once its report is 
   assert.equal(h.ledger().jobs.length, 0);
 });
 
+test('agent_jobs resolve marks a finished job handled and refuses a live one', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'resume' });
+  const job = (await h.delegate()).details as Job;
+  await assert.rejects(() => h.tools.get('agent_jobs').execute('r0', { action: 'resolve', jobId: job.id }), /still running/);
+  await h.tools.get('agent_jobs').execute('stop', { action: 'cancel', jobId: job.id });
+  const done = await h.tools.get('agent_jobs').execute('r1', { action: 'resolve', jobId: job.id });
+  assert.match(done.content[0].text, /marked resolved/);
+  assert.ok(h.ledger().jobs[0].resolved);
+});
+
 test('a reload reports what was open as interrupted, and starts nothing again', async () => {
   const h = host();
   await h.emit('session_start', { reason: 'resume' });

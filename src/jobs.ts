@@ -1,6 +1,6 @@
 import {
   DEFAULT_LIMITS, admit, descendants, emptyLedger, expired, find, live, markDelivered,
-  noteSession, noteQuestion, purge, purgeable, recover, remodel, running, settle, startable, starting, stopping, undelivered,
+  noteSession, noteQuestion, purge, purgeable, recover, remodel, resolve, running, settle, startable, starting, stopping, undelivered,
   type Admission, type Limits, type Request,
 } from './manager.ts';
 import { activityStore, type Activity, type ActivityInput } from './activity.ts';
@@ -49,6 +49,8 @@ export type Jobs = {
    * ones, if they qualify), freeing the session budget. Returns what went.
    */
   purge(jobIds?: readonly string[]): Job[];
+  /** Mark a finished job's blockers as handled. False when it is not finished. */
+  resolve(jobId: string): boolean;
   /** End everything, for a session that is going away. */
   close(reason: string): Promise<void>;
   ledger(): Ledger;
@@ -269,6 +271,12 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
     },
 
     purge: forget,
+    resolve(jobId) {
+      const job = find(store.ledger, jobId);
+      if (!job || !isTerminal(job.state)) return false;
+      if (!job.resolved) commit(resolve(store.ledger, jobId, wiring.now()));
+      return true;
+    },
     ledger: () => store.ledger,
   };
 }

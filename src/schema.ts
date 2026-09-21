@@ -251,6 +251,8 @@ export type Job = {
   usage?: Usage;
   /** Set once the parent has been told, so a reload does not tell it twice. */
   delivered?: moment_;
+  /** Set when a person or the parent handled what it reported as blocked. */
+  resolved?: moment_;
 };
 type moment_ = number;
 
@@ -297,6 +299,7 @@ export const JobSchema = Type.Object({
     calls: Type.Optional(Type.Number({ minimum: 0 })),
   })),
   delivered: Type.Optional(moment),
+  resolved: Type.Optional(moment),
 });
 
 /**

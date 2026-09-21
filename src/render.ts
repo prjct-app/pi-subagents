@@ -174,8 +174,9 @@ export function resultContent(jobs: readonly Job[]): string {
 /** UI status is an outcome, not merely the runner's terminal state. */
 export function statusOf(job: Job): { label: string; icon: string; color: ReturnType<typeof stateColor> } {
   if (job.continuedBy) return { label: 'Continued', icon: '↗', color: 'dim' };
+  if (job.resolved) return { label: 'Resolved', icon: '✓', color: stateColor('completed') };
   if (job.question || job.report?.outcome === 'blocked' || (job.report?.blockers.length ?? 0) > 0) return { label: 'Needs attention', icon: '!', color: 'warning' };
   const labels: Record<JobState, string> = { queued: 'Queued', starting: 'Starting', running: 'Running', stopping: 'Stopping', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', timed_out: 'Timed out', interrupted: 'Interrupted' };
   return { label: labels[job.state], icon: job.state === 'completed' ? '✓' : job.state === 'running' ? '●' : ['failed', 'timed_out'].includes(job.state) ? '×' : '○', color: stateColor(job.state) };
 }
-export const needsAttention = (job: Job): boolean => !job.continuedBy && (statusOf(job).color === 'warning' && Boolean(job.question || job.report?.outcome === 'blocked' || job.report?.blockers.length) || ['failed', 'timed_out', 'interrupted'].includes(job.state));
+export const needsAttention = (job: Job): boolean => !job.continuedBy && !job.resolved && (statusOf(job).color === 'warning' && Boolean(job.question || job.report?.outcome === 'blocked' || job.report?.blockers.length) || ['failed', 'timed_out', 'interrupted'].includes(job.state));

@@ -623,10 +623,11 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     description: 'Review the subagents this session started, or stop one. A job that came back '
       + 'blocked is unresolved work you own: this is where to see what is still open before calling '
       + 'anything finished. Use result for full evidence, steer with a message to guide a live job, or resume with a message to continue a retained conversation. '
+      + 'resolve marks a finished job\'s blockers as handled once you have dealt with them (it then no longer counts as unresolved). '
       + 'purge forgets finished jobs whose reports you already have, freeing the session job budget (a full budget purges them by itself); give jobId to purge one resolved blocker. '
       + 'Never use status to wait: reports arrive in this conversation by themselves and wake the session when it is idle.',
     parameters: Type.Object({
-      action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume', 'purge'] as const),
+      action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume', 'purge', 'resolve'] as const),
       jobId: Type.Optional(Type.String({ maxLength: 128 })),
       message: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
     }),
@@ -647,6 +648,12 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         }
         if (!await steerJob(job.id, input.message)) throw new Error('This job is not reachable; inspect its result or resume it.');
         return { content: [{ type: 'text' as const, text: `Message delivered to ${job.name}.` }], details: job };
+      }
+      if (input.action === 'resolve') {
+        const job = input.jobId ? find(jobs.ledger(), input.jobId) : undefined;
+        if (!job) throw new Error('Give the id of a job this session started.');
+        if (!jobs.resolve(job.id)) throw new Error(`${job.name} is still running; steer it or wait for its report.`);
+        return { content: [{ type: 'text' as const, text: `${job.name} marked resolved.` }], details: find(jobs.ledger(), job.id) };
       }
       if (input.action === 'purge') {
         const gone = jobs.purge(input.jobId ? [input.jobId] : undefined);
@@ -850,6 +857,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         delegation: () => state.delegation.enabled,
         setDelegation: enabled => setDelegation(enabled, context, true),
         purge: jobIds => state.jobs?.purge(jobIds) ?? [],
+        resolve: jobId => state.jobs?.resolve(jobId) ?? false,
       }, { purge });
       if (word === 'purge' && context.mode === 'tui') { await panel(true); return; }
       if (word === 'purge') {

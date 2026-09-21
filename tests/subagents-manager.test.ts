@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   DEFAULT_LIMITS, admit, busy, closable, descendants, emptyLedger, expired, find, live,
   markDelivered, recover, remodel, rootOf, running, settle, startable, starting, stopping,
-  undelivered, unresolved, purge, purgeable,
+  undelivered, unresolved, purge, purgeable, resolve,
 } from '../src/manager.ts';
 import { distinctName, nameFor } from '../src/names.ts';
 import { checkReport, isTerminal, type Ledger, type Report } from '../src/schema.ts';
@@ -304,4 +304,17 @@ test('only finished, delivered, resolved jobs with nothing standing under them a
   const after = purge(delivered, [a.job.id]);
   assert.equal(after.jobs.length, delivered.jobs.length - 1);
   assert.equal(find(after, a.job.id), undefined);
+});
+
+test('a resolved blocker is no longer unresolved, and becomes purgeable', () => {
+  const blocked: Report = { ...good(), outcome: 'blocked', blockers: ['needs a decision'] };
+  const a = accept(emptyLedger('s1'));
+  const settledLedger = markDelivered(settle(a.ledger, a.job.id, { kind: 'reported', report: blocked }, NOW), [a.job.id], NOW);
+  assert.equal(unresolved(settledLedger).length, 1);
+  assert.deepEqual(purgeable(settledLedger), []);
+  const handled = resolve(settledLedger, a.job.id, NOW + 1);
+  assert.equal(unresolved(handled).length, 0);
+  assert.deepEqual(purgeable(handled).map(job => job.id), [a.job.id]);
+  const live = accept(emptyLedger('s2'));
+  assert.equal(resolve(live.ledger, live.job.id, NOW).jobs[0]?.resolved, undefined, 'a live job cannot be resolved');
 });

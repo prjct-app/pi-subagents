@@ -623,9 +623,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     description: 'Review the subagents this session started, or stop one. A job that came back '
       + 'blocked is unresolved work you own: this is where to see what is still open before calling '
       + 'anything finished. Use result for full evidence, steer with a message to guide a live job, or resume with a message to continue a retained conversation. '
+      + 'purge forgets finished jobs whose reports you already have, freeing the session job budget (a full budget purges them by itself); give jobId to purge one resolved blocker. '
       + 'Never use status to wait: reports arrive in this conversation by themselves and wake the session when it is idle.',
     parameters: Type.Object({
-      action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume'] as const),
+      action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume', 'purge'] as const),
       jobId: Type.Optional(Type.String({ maxLength: 128 })),
       message: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
     }),
@@ -646,6 +647,16 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         }
         if (!await steerJob(job.id, input.message)) throw new Error('This job is not reachable; inspect its result or resume it.');
         return { content: [{ type: 'text' as const, text: `Message delivered to ${job.name}.` }], details: job };
+      }
+      if (input.action === 'purge') {
+        const gone = jobs.purge(input.jobId ? [input.jobId] : undefined);
+        const left = jobs.ledger().jobs.length;
+        const text = gone.length
+          ? `Purged ${gone.length} finished job${gone.length === 1 ? '' : 's'}; ${left} of ${state.settings.limits.jobs} remain in this session's budget.`
+          : input.jobId
+            ? 'That job cannot be purged: it is still running, its report has not been delivered, or something under it is still standing.'
+            : `Nothing to purge: the ${left} remaining jobs are running, undelivered, or unresolved.`;
+        return { content: [{ type: 'text' as const, text }], details: jobs.ledger() };
       }
       if (input.action === 'cancel') {
         const job = input.jobId ? find(jobs.ledger(), input.jobId) : undefined;
@@ -674,7 +685,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         content: [{
           type: 'text' as const,
           text: [
-            ...ledgerLines(ledger),
+            ...ledgerLines(ledger, true),
             ...(open.length > 0 ? ['', `${open.length} unresolved: work that is still running or came back blocked.`] : []),
           ].join('\n'),
         }],
@@ -825,15 +836,23 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     limits: () => state.settings.limits,
   };
   pi.registerCommand('agents', {
-    description: brand('subagents: on | off | panel (Ctrl+Alt+A toggles)'),
+    description: brand('subagents: on | off | purge | panel (Ctrl+Alt+A toggles)'),
     getArgumentCompletions: completer([
       { value: 'on', description: 'allow the model to delegate separable work' },
       { value: 'off', description: 'the model does the work itself (default)' },
+      { value: 'purge', description: 'forget finished jobs whose reports were delivered' },
     ]),
     handler: async (args, context) => {
       const word = args.trim();
       if (word === 'on' || word === 'off') { setDelegation(word === 'on', context); return; }
-      if (word) { context.ui.notify('Usage: /agents [on|off]. /agents alone opens the panel.', 'warning'); return; }
+      if (word === 'purge') {
+        const gone = state.jobs?.purge() ?? [];
+        context.ui.notify(gone.length
+          ? `Purged ${gone.length} finished job${gone.length === 1 ? '' : 's'}; ${state.jobs?.ledger().jobs.length ?? 0} of ${state.settings.limits.jobs} in use.`
+          : 'Nothing to purge: every job left is running, undelivered, or unresolved.', 'info');
+        return;
+      }
+      if (word) { context.ui.notify('Usage: /agents [on|off|purge]. /agents alone opens the panel.', 'warning'); return; }
       if (context.mode !== 'tui') { context.ui.notify(handle.lines().join('\n'), 'info'); return; }
       await openAgentsPanel(context, {
         ...handle,

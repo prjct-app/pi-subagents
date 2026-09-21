@@ -54,12 +54,12 @@ export const jobLine = (job: Job): string =>
  * Provenance is the point: a line indented under another is work that one
  * delegated, which is the same shape the panel draws.
  */
-export function ledgerLines(ledger: Ledger | undefined): string[] {
+export function ledgerLines(ledger: Ledger | undefined, ids = false): string[] {
   const jobs = ledger?.jobs ?? [];
   if (jobs.length === 0) return ['No delegated jobs.'];
   const under = (parentJobId: string | undefined, depth: number): string[] =>
     jobs.filter(job => job.parentJobId === parentJobId).flatMap(job => [
-      `${'  '.repeat(depth)}${depth > 0 ? '└ ' : ''}${jobLine(job)}`,
+      `${'  '.repeat(depth)}${depth > 0 ? '└ ' : ''}${jobLine(job)}${ids ? ` · ${job.id}` : ''}`,
       ...under(job.id, depth + 1),
     ]);
   return under(undefined, 0);

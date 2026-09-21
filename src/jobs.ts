@@ -1,6 +1,6 @@
 import {
   DEFAULT_LIMITS, admit, descendants, emptyLedger, expired, find, live, markDelivered,
-  noteSession, noteQuestion, recover, remodel, running, settle, startable, starting, stopping, undelivered,
+  noteSession, noteQuestion, purge, purgeable, recover, remodel, running, settle, startable, starting, stopping, undelivered,
   type Admission, type Limits, type Request,
 } from './manager.ts';
 import { activityStore, type Activity, type ActivityInput } from './activity.ts';
@@ -44,6 +44,11 @@ export type Jobs = {
   record(jobId: string, input: ActivityInput): void;
   /** Come back from a reload: nothing open survives, and nothing is replayed. */
   restore(saved: Ledger | undefined): Promise<void>;
+  /**
+   * Forget finished jobs the parent already has reports for (or the named
+   * ones, if they qualify), freeing the session budget. Returns what went.
+   */
+  purge(jobIds?: readonly string[]): Job[];
   /** End everything, for a session that is going away. */
   close(reason: string): Promise<void>;
   ledger(): Ledger;
@@ -53,6 +58,13 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
   const limits = wiring.limits ?? DEFAULT_LIMITS;
   const store = { ledger: emptyLedger(session) };
   const activity = activityStore(() => wiring.onActivity?.());
+  const forget = (jobIds?: readonly string[]): Job[] => {
+    const going = purgeable(store.ledger, jobIds);
+    if (going.length === 0) return [];
+    commit(purge(store.ledger, going.map(job => job.id)));
+    activity.forget(going.map(job => job.id));
+    return going;
+  };
   /**
    * The live children, by job. A handle is stored as the promise of one so a
    * cancellation that arrives while a child is still starting has something to
@@ -175,6 +187,9 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
     },
 
     async delegate(request) {
+      // A full budget is never spent on work that already reported: finished,
+      // delivered jobs make room before a new one is refused.
+      if (store.ledger.jobs.length >= limits.jobs) forget();
       const decision = admit(store.ledger, request, wiring.now(), limits);
       if (!decision.ok || decision.repeated) return decision;
       commit(decision.ledger);
@@ -253,6 +268,7 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
       await reap();
     },
 
+    purge: forget,
     ledger: () => store.ledger,
   };
 }

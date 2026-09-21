@@ -272,3 +272,21 @@ test('a child that cannot acknowledge stop keeps its slot reserved', async () =>
   state.fail = false; await jobs.cancel(first.id, 'retry'); assert.equal(state.started, 2);
   await jobs.close('done');
 });
+
+test('a full session budget purges finished, delivered jobs instead of refusing new work', async () => {
+  const limits: Limits = { ...DEFAULT_LIMITS, jobs: 3, concurrency: 3 };
+  const { jobs, of } = jobsWith({ limits });
+  const first = await accepted(jobs);
+  const second = await accepted(jobs);
+  const third = await accepted(jobs);
+  of(first).emit({ type: 'settled', report: good() });
+  of(second).emit({ type: 'settled', report: good() });
+  await new Promise(resolve => setImmediate(resolve));
+  // Reported but not yet delivered to the parent: still held.
+  const refused = await jobs.delegate(ask() as any);
+  assert.equal(refused.ok, false);
+  assert.equal(jobs.drain().length, 2);
+  const fourth = await accepted(jobs);
+  assert.deepEqual(jobs.ledger().jobs.map(job => job.id), [third.id, fourth.id]);
+  assert.deepEqual(jobs.purge(), [], 'nothing finished is left to purge');
+});

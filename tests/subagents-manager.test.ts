@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   DEFAULT_LIMITS, admit, busy, closable, descendants, emptyLedger, expired, find, live,
   markDelivered, recover, remodel, rootOf, running, settle, startable, starting, stopping,
-  undelivered, unresolved,
+  undelivered, unresolved, purge, purgeable,
 } from '../src/manager.ts';
 import { distinctName, nameFor } from '../src/names.ts';
 import { checkReport, isTerminal, type Ledger, type Report } from '../src/schema.ts';
@@ -62,7 +62,7 @@ test('every refusal says why, and nothing is quietly trimmed to fit', () => {
     ledger => accept(ledger).ledger, base);
   const over = admit(full, ask() as any, NOW);
   assert.equal(over.ok, false);
-  assert.match((over as any).reason, /accepted its 64 jobs/);
+  assert.match((over as any).reason, /holds 64 jobs.*agent_jobs purge/);
 });
 
 test('delegation stops at the configured depth, and says so', () => {
@@ -282,4 +282,26 @@ test('a retained session admits only one active continuation', () => {
   const duplicate = admit(first.ledger, ask({ resumedFrom: 'old', resumeSession: '/history/session.jsonl' }) as any, NOW);
   assert.equal(duplicate.ok, false);
   assert.match((duplicate as any).reason, /active continuation/);
+});
+
+test('only finished, delivered, resolved jobs with nothing standing under them are purgeable', () => {
+  const done = (ledger: Ledger, id: string, report: Report = good()) =>
+    settle(ledger, id, { kind: 'reported', report }, NOW);
+  const a = accept(emptyLedger('s1'));
+  const b = accept(a.ledger);
+  const c = accept(b.ledger);
+  const child = accept(c.ledger, { parentJobId: c.job.id, depth: 1 });
+  const d = accept(child.ledger);
+  const blocked: Report = { ...good(), outcome: 'blocked', blockers: ['needs a decision'] };
+  const settled = done(done(done(d.ledger, a.job.id), c.job.id), d.job.id, blocked);
+  // b is still running; a, c and d finished; c has a live child.
+  const delivered = markDelivered(settled, [a.job.id, c.job.id, d.job.id], NOW);
+  assert.deepEqual(purgeable(delivered).map(job => job.id), [a.job.id],
+    'a live job, a job with a live child, and an unresolved blocker all stay');
+  assert.deepEqual(purgeable(settled).map(job => job.id), [], 'an undelivered report is never purged');
+  assert.deepEqual(purgeable(delivered, [d.job.id]).map(job => job.id), [d.job.id], 'a named blocker can be purged');
+  assert.deepEqual(purgeable(delivered, [b.job.id]), [], 'naming a live job purges nothing');
+  const after = purge(delivered, [a.job.id]);
+  assert.equal(after.jobs.length, delivered.jobs.length - 1);
+  assert.equal(find(after, a.job.id), undefined);
 });

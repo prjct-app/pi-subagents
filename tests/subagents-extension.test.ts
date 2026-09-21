@@ -387,6 +387,20 @@ test('status shows the tree, and cancelling one stops its child', async () => {
     /Give the id of a job this session started/);
 });
 
+test('status lists job ids, and purge forgets a finished job once its report is delivered', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'resume' });
+  const job = (await h.delegate()).details as Job;
+  const status = await h.tools.get('agent_jobs').execute('ids', { action: 'status' });
+  assert.match(status.content[0].text, new RegExp(job.id), 'the model can name a job it sees in the list');
+  const early = await h.tools.get('agent_jobs').execute('p0', { action: 'purge' });
+  assert.match(early.content[0].text, /Nothing to purge/);
+  await h.tools.get('agent_jobs').execute('stop', { action: 'cancel', jobId: job.id });
+  const purged = await h.tools.get('agent_jobs').execute('p1', { action: 'purge' });
+  assert.match(purged.content[0].text, /Purged 1 finished job; 0 of \d+ remain/);
+  assert.equal(h.ledger().jobs.length, 0);
+});
+
 test('a reload reports what was open as interrupted, and starts nothing again', async () => {
   const h = host();
   await h.emit('session_start', { reason: 'resume' });
@@ -622,6 +636,7 @@ test('/agents completes on and off with the prjct mark, and o in the panel toggl
   assert.deepEqual(agents.getArgumentCompletions('').map((item: any) => [item.value, item.description]), [
     ['on', 'p · allow the model to delegate separable work'],
     ['off', 'p · the model does the work itself (default)'],
+    ['purge', 'p · forget finished jobs whose reports were delivered'],
   ]);
   await agents.handler('on', h.ctx);
   assert.match(h.notices.at(-1) ?? '', /Subagents on/);

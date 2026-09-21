@@ -81,6 +81,27 @@ export const undelivered = (ledger: Ledger): Job[] => settled(ledger).filter(job
 export const unresolved = (ledger: Ledger): Job[] =>
   ledger.jobs.filter(job => !isTerminal(job.state) || (!job.continuedBy && (job.report?.blockers?.length ?? 0) > 0));
 export const find = (ledger: Ledger, jobId: string): Job | undefined => ledger.jobs.find(job => job.id === jobId);
+
+/**
+ * Finished jobs whose report the parent already holds. Dropping them frees the
+ * session budget and loses nothing the conversation does not already have.
+ * Live jobs, undelivered reports and a job with anything still standing under
+ * it or continuing it always stay. Unresolved blockers stay unless named.
+ */
+export function purgeable(ledger: Ledger, jobIds?: readonly string[]): Job[] {
+  const named = jobIds ? new Set(jobIds) : undefined;
+  const open = new Set(unresolved(ledger).map(job => job.id));
+  const chosen = ledger.jobs.filter(job => isTerminal(job.state) && job.delivered !== undefined
+    && (named ? named.has(job.id) : !open.has(job.id)));
+  const ids = new Set(chosen.map(job => job.id));
+  return chosen.filter(job => descendants(ledger, job.id).every(child => ids.has(child.id))
+    && (!job.continuedBy || ids.has(job.continuedBy) || !find(ledger, job.continuedBy)));
+}
+
+export function purge(ledger: Ledger, jobIds: readonly string[]): Ledger {
+  const gone = new Set(jobIds);
+  return { ...ledger, jobs: ledger.jobs.filter(job => !gone.has(job.id)) };
+}
 export const children = (ledger: Ledger, jobId: string): Job[] => ledger.jobs.filter(job => job.parentJobId === jobId);
 
 /**
@@ -152,7 +173,7 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
     }
   }
   if (ledger.jobs.length >= limits.jobs) {
-    return { ok: false, reason: `This session has accepted its ${limits.jobs} jobs. Raise limits.jobs in prjct-subagents.json for a new session; completed jobs still consume this budget.` };
+    return { ok: false, reason: `This session holds ${limits.jobs} jobs that are still running, undelivered, or unresolved. Resolve or cancel some (agent_jobs), purge a finished one by id (agent_jobs purge), or raise limits.jobs in prjct-subagents.json.` };
   }
 
   if (request.resumeSession && live(ledger).some(job => job.resumeSession === request.resumeSession || job.sessionFile === request.resumeSession)) return { ok: false, reason: 'This conversation already has an active continuation.' };

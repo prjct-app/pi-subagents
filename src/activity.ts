@@ -37,5 +37,6 @@ export function activityStore(notify: () => void) {
     },
     get: (jobId: string): Activity[] => [...(data.get(jobId) ?? [])],
     clear: () => data.clear(),
+    forget: (jobIds: readonly string[]) => { for (const jobId of jobIds) data.delete(jobId); notify(); },
   };
 }

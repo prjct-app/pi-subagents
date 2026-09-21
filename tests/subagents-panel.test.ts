@@ -234,3 +234,48 @@ test('the panel says whether delegation is on, and o turns it on or off', t => {
   assert.match(h.text(), /◆ delegation on/);
   assert.match(h.text(), /Delegation on: the model may start subagents/);
 });
+
+test('p opens a purge chooser by status, asks once more, and purges only that group', t => {
+  const done = (state: Job['state'], over: Partial<Job> = {}) => job({ state, settled: Date.now(), delivered: Date.now(), ...over });
+  const jobs = [
+    done('completed', { name: 'Ana' }), done('completed', { name: 'Bea' }),
+    done('timed_out', { name: 'Cris' }), done('timed_out', { name: 'Dani' }), done('timed_out', { name: 'Eli' }),
+    done('failed', { name: 'Fede' }),
+    done('cancelled', { name: 'Gus', delivered: undefined }),
+    job({ name: 'Hugo' }),
+  ];
+  const purged: string[][] = [];
+  const h = harness(jobs, { purge: ids => { purged.push([...ids]); const gone = new Set(ids); const out = h.store.jobs.filter(item => gone.has(item.id)); h.store.jobs = h.store.jobs.filter(item => !gone.has(item.id)); return out; } });
+  t.after(() => h.panel.dispose());
+  assert.match(h.text(), /p purge/, 'the footer offers the key');
+  h.panel.handleInput('p');
+  const chooser = h.text();
+  assert.match(chooser, /Purge finished agents/);
+  assert.match(chooser, /› All finished {2}6/);
+  assert.match(chooser, /Completed {2}2/);
+  assert.match(chooser, /Timed out {2}3/);
+  assert.match(chooser, /Failed {2}1/);
+  assert.match(chooser, /Cancelled {2}0 · 1 kept/, 'an undelivered report is never purged');
+  assert.doesNotMatch(chooser, /Interrupted/, 'empty groups are not offered');
+  // Choose "Timed out": All finished, Completed, Failed, Timed out.
+  for (const _ of [1, 2, 3]) h.panel.handleInput('\x1b[B');
+  h.panel.handleInput('\r');
+  assert.match(h.text(), /Purge 3 timed out agents\? enter confirm/);
+  assert.equal(purged.length, 0, 'nothing goes before the second Enter');
+  h.panel.handleInput('\r');
+  assert.deepEqual(purged[0]?.length, 3);
+  assert.deepEqual(h.store.jobs.map(item => item.name), ['Ana', 'Bea', 'Fede', 'Gus', 'Hugo']);
+  assert.match(h.text(), /Purged 3 agents; 5 left/);
+  assert.doesNotMatch(h.text(), /Purge finished agents/, 'the chooser closes after purging');
+});
+
+test('esc leaves the purge chooser without purging', t => {
+  const purged: string[] = [];
+  const h = harness([job({ state: 'completed', delivered: Date.now() })], { purge: ids => { purged.push(...ids); return []; } });
+  t.after(() => h.panel.dispose());
+  h.panel.handleInput('p');
+  h.panel.handleInput('\r');
+  h.panel.handleInput('\x1b');
+  assert.doesNotMatch(h.text(), /Purge finished agents/);
+  assert.deepEqual(purged, []);
+});

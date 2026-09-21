@@ -636,7 +636,7 @@ test('/agents completes on and off with the prjct mark, and o in the panel toggl
   assert.deepEqual(agents.getArgumentCompletions('').map((item: any) => [item.value, item.description]), [
     ['on', 'p · allow the model to delegate separable work'],
     ['off', 'p · the model does the work itself (default)'],
-    ['purge', 'p · forget finished jobs whose reports were delivered'],
+    ['purge', 'p · choose finished agents to forget, by status'],
   ]);
   await agents.handler('on', h.ctx);
   assert.match(h.notices.at(-1) ?? '', /Subagents on/);

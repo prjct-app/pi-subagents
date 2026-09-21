@@ -2,11 +2,11 @@ import type { ExtensionCommandContext, Theme } from '@earendil-works/pi-coding-a
 import { Editor, Input, Key, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type Focusable, type TUI } from '@earendil-works/pi-tui';
 import { stat } from 'node:fs/promises';
 import { needsAttention, seconds, spent, statusOf } from './render.ts';
-import { isTerminal, type Job, type Ledger } from './schema.ts';
+import { isTerminal, TERMINAL, type Job, type JobState, type Ledger } from './schema.ts';
 import { plain } from './text.ts';
 import { readTranscriptPage, type TranscriptEntry } from './transcript.ts';
 import type { Activity } from './activity.ts';
-import { descendants as jobDescendants, type Limits } from './manager.ts';
+import { descendants as jobDescendants, purgeable, type Limits } from './manager.ts';
 
 export type PanelSource = {
   ledger: () => Ledger | undefined;
@@ -20,7 +20,33 @@ export type PanelSource = {
   /** Whether the model may delegate, and how to change it from the panel. */
   delegation?: () => boolean;
   setDelegation?: (enabled: boolean) => void;
+  /** Forget the named finished jobs that qualify; returns what went. */
+  purge?: (jobIds: readonly string[]) => Job[];
 };
+
+/** What the purge chooser offers, by status. "All finished" is always first. */
+export const PURGE_GROUPS: readonly { label: string; states: readonly JobState[] }[] = [
+  { label: 'All finished', states: TERMINAL },
+  { label: 'Completed', states: ['completed'] },
+  { label: 'Failed', states: ['failed'] },
+  { label: 'Timed out', states: ['timed_out'] },
+  { label: 'Cancelled', states: ['cancelled'] },
+  { label: 'Interrupted', states: ['interrupted'] },
+];
+
+/**
+ * One chooser row per status that has finished agents: how many there are,
+ * and how many of them can go. A job the parent has not heard from yet, or
+ * one with work still standing under it, stays whatever the choice.
+ */
+export function purgeChoices(ledger: Ledger | undefined): { label: string; total: number; ids: string[] }[] {
+  const jobs = ledger?.jobs ?? [];
+  return PURGE_GROUPS.map(group => {
+    const members = jobs.filter(job => group.states.includes(job.state));
+    const ids = ledger ? purgeable(ledger, members.map(job => job.id)).map(job => job.id) : [];
+    return { label: group.label, total: members.length, ids };
+  }).filter((choice, index) => index === 0 || choice.total > 0);
+}
 
 /** Corrupt cycles or missing ancestors must not hide a job or recurse forever. */
 export function rows(ledger: Ledger | undefined): { job: Job; depth: number }[] {
@@ -38,13 +64,15 @@ type History = { entries: TranscriptEntry[]; before?: number; next?: number; siz
 const MAX_DRAFT = 4000;
 const safeDraft = (text: string): string => plain(text).replace(/\r\n?/g, '\n');
 
-export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: () => void): Component & Focusable & { dispose(): void; handleInput(data: string): void } {
+export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: () => void): Component & Focusable & { dispose(): void; handleInput(data: string): void; choosePurge(): void } {
   const state = {
     selected: undefined as string | undefined, focus: 'tree' as 'tree' | 'detail', tab: 0, filter: 0,
     query: '', searching: false, help: false, notice: '', pending: '',
     composing: undefined as 'steer' | 'resume' | undefined, scroll: 0, follow: true,
     width: 100, height: 24, pageHeight: 10, contentHeight: 0, disposed: false, history: false,
     paste: false, pasteValue: '', pasteOversize: false, confirmStop: '',
+    /** The purge chooser: the highlighted row, and whether Enter was pressed once. */
+    purging: undefined as number | undefined, confirmPurge: false,
   };
   const collapsed = new Set<string>();
   const expandedTools = new Set<string>();
@@ -254,9 +282,23 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const right = detail(job, rightWidth, bodyHeight);
     const help = width < 56
       ? ['↑↓/jk  move / scroll', 'Enter  open selected', 'Tab  agents / detail', '1/2/3  switch view', '/ search · f filter', 's message · r continue', 'x x stop · h history · t tools', 'Esc  back / close']
-      : ['↑↓ / j k  move or scroll · Enter open · Tab switch pane', '1 / 2 / 3  activity, result, details', '/ search · f filter agents', 's message · r continue · x x stop', 'h retained history · t expand tool output', 'PgUp / PgDn page · Home top · End follow', 'Esc back or close · ? toggle help'];
+      : ['↑↓ / j k  move or scroll · Enter open · Tab switch pane', '1 / 2 / 3  activity, result, details', '/ search · f filter agents', 's message · r continue · x x stop · p purge', 'h retained history · t expand tool output', 'PgUp / PgDn page · Home top · End follow', 'Esc back or close · ? toggle help'];
+    const choices = state.purging === undefined ? [] : purgeChoices(source.ledger());
+    const chooser = state.purging === undefined ? [] : [
+      theme.bold('Purge finished agents'),
+      dim('Their reports are already in the conversation; purging frees the session budget.'),
+      '',
+      ...choices.map((choice, index) => {
+        const lead = index === state.purging ? accent(theme.bold('›')) : ' ';
+        const name = index === state.purging ? accent(theme.bold(choice.label)) : choice.label;
+        const kept = choice.total - choice.ids.length;
+        const count = choice.ids.length ? `${choice.ids.length}` : dim('0');
+        return `${lead} ${name}  ${count}${kept ? dim(` · ${kept} kept (not reported yet or work still under them)`) : ''}`;
+      }),
+    ];
     const body = Array.from({ length: bodyHeight }, (_, index) => {
       if (state.help) return ` ${fit(index < help.length ? plain(help[index]) : '', Math.max(1, width - 2))} `;
+      if (state.purging !== undefined) return ` ${fit(chooser[index] ?? '', Math.max(1, width - 2))} `;
       if (!wide) return ` ${fit((state.focus === 'tree' && !state.composing ? left : right)[index] ?? '', Math.max(1, width - 2))} `;
       return `${fit(left[index] ?? '', leftWidth)} ${dim('│')} ${fit(right[index] ?? '', rightWidth)}`;
     });
@@ -265,9 +307,10 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       : '';
     const narrow = width < 56;
     const hints = state.help ? narrow ? '↑↓ scroll · ?/Esc close' : 'Esc close help'
+      : state.purging !== undefined ? narrow ? '↑↓ choose · enter purge · esc' : '↑↓ choose · enter purge · esc cancel'
       : state.searching ? narrow ? '/ find · Enter done · Esc clear' : 'Type to filter · Enter apply · Esc cancel'
       : state.composing ? narrow ? 'Ctrl+S send · Esc save draft' : 'Enter newline · Ctrl+Enter / Ctrl+S send · Esc save draft'
-      : state.focus === 'tree' ? narrow ? '↑↓ move · enter open · o on/off · esc' : `enter open · o ${source.delegation?.() ? 'turn off' : 'turn on'} · s message · x stop · f filter · / search · ? keys · esc`
+      : state.focus === 'tree' ? narrow ? '↑↓ move · enter open · o on/off · esc' : `enter open · o ${source.delegation?.() ? 'turn off' : 'turn on'} · s message · x stop · p purge · f filter · / search · ? keys · esc`
       : narrow ? `↑↓ ${position || 'scroll'} · s msg · Esc back` : `↑↓ scroll${position ? ` ${position}` : ''} · Tab agents · 1–3 view · s message · x stop · Esc back`;
     // Same grammar as every other panel: the key in accent, then what it does.
     const keyed = (text: string): string => text.split(' · ').map(part => {
@@ -334,8 +377,28 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
       }
     }
   };
+  const purgeInput = (data: string): void => {
+    const choices = purgeChoices(source.ledger());
+    const at = Math.max(0, Math.min(state.purging ?? 0, choices.length - 1));
+    if (matchesKey(data, Key.escape) || data === 'q') {
+      state.purging = undefined; state.confirmPurge = false; state.notice = '';
+    } else if (matchesKey(data, Key.up) || data === 'k' || matchesKey(data, Key.down) || data === 'j') {
+      const up = matchesKey(data, Key.up) || data === 'k';
+      state.purging = Math.max(0, Math.min(choices.length - 1, at + (up ? -1 : 1)));
+      state.confirmPurge = false; state.notice = '';
+    } else if (matchesKey(data, Key.enter) || data === 'p') {
+      const choice = choices[at];
+      if (!choice || choice.ids.length === 0) { state.notice = 'Nothing in this group can be purged.'; state.confirmPurge = false; return; }
+      const what = `${choice.ids.length} ${choice.label === 'All finished' ? 'finished' : choice.label.toLowerCase()} agent${choice.ids.length === 1 ? '' : 's'}`;
+      if (!state.confirmPurge) { state.confirmPurge = true; state.notice = `Purge ${what}? enter confirm · esc cancel`; return; }
+      const gone = source.purge?.(choice.ids) ?? [];
+      state.purging = undefined; state.confirmPurge = false; resetView();
+      state.notice = gone.length ? `Purged ${gone.length} agent${gone.length === 1 ? '' : 's'}; ${source.ledger()?.jobs.length ?? 0} left.` : 'Nothing was purged.';
+    }
+  };
   const handleInput = (data: string): void => {
     if (state.composing) { editorInput(data); request(); return; }
+    if (state.purging !== undefined) { purgeInput(data); refresh(); return; }
     if (state.help) { if (data === '?' || matchesKey(data, Key.escape)) state.help = false; request(); return; }
     if (state.searching) {
       if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) { state.searching = false; search.focused = false; }
@@ -352,6 +415,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     } else if (data === '?') state.help = true;
     else if (data === '/') { state.searching = true; search.focused = true; search.setValue(state.query); }
     else if (data === 'f') { state.filter = (state.filter + 1) % 3; resetView(); }
+    else if (data === 'p' && source.purge) { state.purging = 0; state.confirmPurge = false; state.notice = ''; }
     else if (data === 'o' && source.setDelegation && source.delegation) {
       const next = !source.delegation();
       source.setDelegation(next);
@@ -401,6 +465,8 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
   };
   return {
     render, handleInput, invalidate() { editor.invalidate(); search.invalidate(); },
+    /** Open straight into the purge chooser (/agents purge). */
+    choosePurge() { if (source.purge) { state.purging = 0; state.confirmPurge = false; request(); } },
     dispose() { state.disposed = true; clearInterval(timer); unsubscribe?.(); },
     get focused() { return state.searching ? search.focused : editor.focused; },
     set focused(value: boolean) { search.focused = value && state.searching; editor.focused = value && Boolean(state.composing); },
@@ -408,6 +474,10 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
 }
 
 /** Docked like every other panel: it takes the editor's place, esc gives it back. */
-export async function openAgentsPanel(ctx: ExtensionCommandContext, source: PanelSource): Promise<void> {
-  await ctx.ui.custom<null>((tui, theme, _keys, done) => agentsPanel(source, tui, theme, () => done(null)));
+export async function openAgentsPanel(ctx: ExtensionCommandContext, source: PanelSource, options: { purge?: boolean } = {}): Promise<void> {
+  await ctx.ui.custom<null>((tui, theme, _keys, done) => {
+    const panel = agentsPanel(source, tui, theme, () => done(null));
+    if (options.purge) panel.choosePurge();
+    return panel;
+  });
 }

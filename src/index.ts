@@ -840,11 +840,18 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     getArgumentCompletions: completer([
       { value: 'on', description: 'allow the model to delegate separable work' },
       { value: 'off', description: 'the model does the work itself (default)' },
-      { value: 'purge', description: 'forget finished jobs whose reports were delivered' },
+      { value: 'purge', description: 'choose finished agents to forget, by status' },
     ]),
     handler: async (args, context) => {
       const word = args.trim();
       if (word === 'on' || word === 'off') { setDelegation(word === 'on', context); return; }
+      const panel = (purge = false) => openAgentsPanel(context, {
+        ...handle,
+        delegation: () => state.delegation.enabled,
+        setDelegation: enabled => setDelegation(enabled, context, true),
+        purge: jobIds => state.jobs?.purge(jobIds) ?? [],
+      }, { purge });
+      if (word === 'purge' && context.mode === 'tui') { await panel(true); return; }
       if (word === 'purge') {
         const gone = state.jobs?.purge() ?? [];
         context.ui.notify(gone.length
@@ -854,11 +861,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       }
       if (word) { context.ui.notify('Usage: /agents [on|off|purge]. /agents alone opens the panel.', 'warning'); return; }
       if (context.mode !== 'tui') { context.ui.notify(handle.lines().join('\n'), 'info'); return; }
-      await openAgentsPanel(context, {
-        ...handle,
-        delegation: () => state.delegation.enabled,
-        setDelegation: enabled => setDelegation(enabled, context, true),
-      });
+      await panel();
     },
   });
   pi.registerShortcut?.(Key.ctrlAlt('a'), {

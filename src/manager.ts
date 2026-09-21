@@ -24,11 +24,12 @@ export type Limits = {
 };
 
 /**
- * Conservative on purpose. Raising them is trusted user configuration; a task
- * can never raise them, because a task is written by a model.
+ * Every job admitted by the default session budget gets its own runner at
+ * once. A smaller concurrency value remains an explicit operator throttle;
+ * a task can never lower or raise these limits because a task is model input.
  */
 export const DEFAULT_LIMITS: Limits = {
-  concurrency: 2,
+  concurrency: 64,
   jobs: 64,
   taskBytes: 24 * 1024,
   timeoutMs: 10 * 60_000,

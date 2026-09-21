@@ -25,7 +25,7 @@ export function loadSettings(cwd: string, home = agentHome(), warn: (text: strin
         else if (key === 'artifactPolicy' && (value === 'none' || value === 'requested')) next.artifactPolicy = value;
         else if (key === 'extensionPackages' && Array.isArray(value) && value.every(v => typeof v === 'string' && v.trim())) next.extensionPackages = [...new Set(value)];
         else if (key === 'limits' && value && typeof value === 'object' && !Array.isArray(value)) {
-          const maxima: Limits = { concurrency: 16, jobs: 256, depth: 8, descendants: 64, taskBytes: 48 * 1024, timeoutMs: 24 * 60 * 60_000 };
+          const maxima: Limits = { concurrency: 256, jobs: 256, depth: 8, descendants: 64, taskBytes: 48 * 1024, timeoutMs: 24 * 60 * 60_000 };
           for (const [name, number] of Object.entries(value)) {
             if (name in maxima && Number.isInteger(number) && number > 0 && number <= maxima[name as keyof Limits]) next.limits[name as keyof Limits] = number;
             else warn(`${file}: invalid limits.${name}; keeping the previous value.`);

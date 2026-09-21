@@ -24,6 +24,19 @@ export type Met = (typeof MET)[number];
 export const ROLES = ['explorer', 'reviewer', 'worker'] as const;
 export type Role = (typeof ROLES)[number];
 
+/** Package-owned profiles accepted anywhere a job can be delegated. */
+export const FACTORY_AGENTS = [
+  'product-discovery',
+  'specification-architect',
+  'bug-triager',
+  'implementer',
+  'quality-reviewer',
+  'delivery-engineer',
+  'product-documenter',
+] as const;
+export const DELEGATE_AGENTS = [...ROLES, ...FACTORY_AGENTS] as const;
+export type DelegateAgent = (typeof DELEGATE_AGENTS)[number];
+
 /**
  * The one tool a child has that is not a way of reading.
  *
@@ -90,16 +103,18 @@ export const QuestionAskSchema = Type.Object({
 });
 
 export const DelegateSchema = Type.Object({
-  role: Type.Optional(StringEnum(ROLES)),
-  agent: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  agent: StringEnum(DELEGATE_AGENTS, {
+    description: 'A factory profile or base role. Use this single selector; do not also send role.',
+  }),
   subject: Type.String({ minLength: 1, maxLength: 160 }),
   task: Type.String({ minLength: 1, maxLength: 24000 }),
   context: Type.Optional(Type.String({ maxLength: 24000 })),
   model: Type.Optional(Type.String({ maxLength: 256 })),
 });
 export type DelegateAsk = {
-  role?: Role;
+  /** Current requests use agent. role remains accepted on the parent wire for old running children. */
   agent?: string;
+  role?: Role;
   subject: string;
   task: string;
   context?: string;

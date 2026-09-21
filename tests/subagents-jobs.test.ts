@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { makeJobs } from '../src/jobs.ts';
-import { DEFAULT_LIMITS, find, live } from '../src/manager.ts';
+import { DEFAULT_LIMITS, find, live, type Limits } from '../src/manager.ts';
 import type { Handle, Runner, RunnerEvent } from '../src/runner.ts';
 import type { Job, Ledger, Report } from '../src/schema.ts';
 
@@ -45,7 +45,7 @@ function fakeRunner(options: { hangs?: boolean; broken?: boolean; dyingOfAbort?:
   };
 }
 
-function jobsWith(options: { hangs?: boolean; broken?: boolean; dyingOfAbort?: boolean } = {}) {
+function jobsWith(options: { hangs?: boolean; broken?: boolean; dyingOfAbort?: boolean; limits?: Limits } = {}) {
   const clock = { now: NOW };
   const saved: Ledger[] = [];
   const fake = fakeRunner(options);
@@ -53,6 +53,7 @@ function jobsWith(options: { hangs?: boolean; broken?: boolean; dyingOfAbort?: b
     runner: fake.runner,
     now: () => clock.now,
     persist: ledger => { saved.push(ledger); },
+    ...(options.limits ? { limits: options.limits } : {}),
   });
   return { jobs, clock, saved, ...fake };
 }
@@ -63,14 +64,15 @@ const accepted = async (jobs: ReturnType<typeof makeJobs>, over: Record<string, 
   return decision.job;
 };
 
-test('as many children run as the session allows, and the next starts as one ends', async () => {
+test('every accepted child starts as an independent runner in parallel by default', async () => {
   const { jobs, runs, of } = jobsWith();
   const first = await accepted(jobs);
   const second = await accepted(jobs);
   const third = await accepted(jobs);
 
-  assert.equal(runs.size, DEFAULT_LIMITS.concurrency, 'the third is admitted, not started');
-  assert.equal(find(jobs.ledger(), third.id)?.state, 'queued');
+  assert.equal(runs.size, 3);
+  assert.deepEqual([first, second, third].map(job => find(jobs.ledger(), job.id)?.state),
+    ['starting', 'starting', 'starting']);
 
   of(first).emit({ type: 'running' });
   assert.equal(find(jobs.ledger(), first.id)?.state, 'running');
@@ -81,8 +83,18 @@ test('as many children run as the session allows, and the next starts as one end
   assert.equal(find(jobs.ledger(), first.id)?.state, 'completed');
   assert.equal(find(jobs.ledger(), first.id)?.usage?.cost, 0.02);
   assert.deepEqual(of(first).stops.length, 1, 'a child that has reported is not left running');
-  assert.equal(runs.size, 3, 'the slot it freed went to the one that was waiting');
+  assert.equal(runs.size, 3, 'the other entities were already running beside it');
   assert.equal(find(jobs.ledger(), second.id)?.state, 'starting');
+});
+
+test('the full default session budget starts without a persistent queue', async () => {
+  const { jobs, runs } = jobsWith();
+  const admitted = await Promise.all(Array.from({ length: DEFAULT_LIMITS.jobs }, (_, index) =>
+    accepted(jobs, { subject: `parallel ${index}`, key: `parallel-${index}` })));
+  assert.equal(runs.size, DEFAULT_LIMITS.jobs);
+  assert.equal(jobs.ledger().jobs.filter(job => job.state === 'queued').length, 0);
+  assert.ok(admitted.every(job => find(jobs.ledger(), job.id)?.state === 'starting'));
+  await jobs.close('test complete');
 });
 
 test('the same tool call twice starts one child, however many times it arrives', async () => {
@@ -220,7 +232,7 @@ test('every change reaches the session file, so a reload has something to read',
 });
 
 test('a slot is not free while the process in it is still dying', async () => {
-  const { jobs, release } = jobsWith({ hangs: true });
+  const { jobs, release } = jobsWith({ hangs: true, limits: { ...DEFAULT_LIMITS, concurrency: 2 } });
   const first = await accepted(jobs);
   await accepted(jobs);
   const third = await accepted(jobs);

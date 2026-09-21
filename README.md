@@ -62,7 +62,7 @@ not silently shortened. Standard Pi themes and Unicode editing are preserved.
 
 ## Lean software factory
 
-`agent_delegate` can select one package-owned factory profile instead of a base role:
+`agent_delegate` uses one required `agent` selector. It accepts either a base role (`explorer`, `reviewer`, `worker`) or one package-owned factory profile:
 
 - `product-discovery` — evidence-led research and lean design sprints.
 - `specification-architect` — one non-duplicative SDD/BDD specification.
@@ -84,7 +84,7 @@ files. The resulting `changes.patch` must be reviewed and applied separately.
 
 ## Three tools
 
-- **`agent_delegate`**: choose either `agent` or `role`, plus `subject`, `task`, and optional `context`, `model`, `cwd`. `requestedByUser: true` is required for `product-documenter`.
+- **`agent_delegate`**: set `agent` to a base role or factory profile, plus `subject`, `task`, and optional `context`, `model`, `cwd`. `requestedByUser: true` is required for `product-documenter`.
 - **`agent_jobs`**: `action: status | result | cancel | steer | resume`, optional
   `jobId` and `message` (required for steer/resume). `result` returns the full report.
 - **`agent_reply`**: `name`, `answer`; answer a question escalated by a live child.
@@ -132,7 +132,7 @@ the parent session starts again.
   "artifactPolicy": "requested",
   "extensionPackages": [],
   "limits": {
-    "concurrency": 2,
+    "concurrency": 64,
     "jobs": 64,
     "timeoutMs": 600000,
     "depth": 2,
@@ -143,10 +143,12 @@ the parent session starts again.
 ```
 
 `jobs` is a cumulative per-parent-session budget, including continuations;
-completed jobs do not refund it. Concurrency is a separate live capacity limit.
+completed jobs do not refund it. By default `concurrency` equals that budget, so every
+accepted subagent starts as an independent runner in parallel. Set a smaller concurrency
+value only when an operator explicitly wants a resource throttle and queued work.
 The clock covers the entire tree from admission, including queued time. Running roots receive
 best-effort reminders at 60% and 85% of that budget so they narrow scope and report before
-the hard deadline. Supported maxima are 16 concurrent jobs, 256 session runs, depth 8, 64 descendants,
+the hard deadline. Supported maxima are 256 concurrent jobs, 256 session runs, depth 8, 64 descendants,
 24 hours per tree and 48 KiB of task plus context. Session retention accepts 1–365 days;
 external workspace retention accepts 1–720 hours. `artifactPolicy` is `requested` by
 default or `none` to disable product-documentation artifacts.

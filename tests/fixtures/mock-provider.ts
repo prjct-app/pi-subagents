@@ -21,7 +21,7 @@ export default function fixtureProvider(pi: ExtensionAPI): void {
           stream.push({ type: 'done', reason: 'stop', message }); stream.end(); return;
         }
         if (text.includes('fixture-delegate') && previous?.toolName !== 'subagent_delegate') {
-          message.content = [{ type: 'toolCall', id: 'fixture-delegate', name: 'subagent_delegate', arguments: { role: 'explorer', subject: 'Read contracts', task: 'Inspect the contract.' } }];
+          message.content = [{ type: 'toolCall', id: 'fixture-delegate', name: 'subagent_delegate', arguments: { agent: 'explorer', subject: 'Read contracts', task: 'Inspect the contract.' } }];
           stream.push({ type: 'done', reason: 'toolUse', message }); stream.end(); return;
         }
         message.content = [{ type: 'toolCall', id: 'fixture-report', name: 'subagent_report', arguments: {

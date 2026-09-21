@@ -2,17 +2,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { parseFrontmatter } from '@earendil-works/pi-coding-agent';
-import { ROLES, type Role } from './schema.ts';
-
-export const FACTORY_AGENTS = [
-  'product-discovery',
-  'specification-architect',
-  'bug-triager',
-  'implementer',
-  'quality-reviewer',
-  'delivery-engineer',
-  'product-documenter',
-] as const;
+import { FACTORY_AGENTS, ROLES, type Role } from './schema.ts';
+export { FACTORY_AGENTS } from './schema.ts';
 export type FactoryAgentName = (typeof FACTORY_AGENTS)[number];
 
 export type FactoryAgent = {

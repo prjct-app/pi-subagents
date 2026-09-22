@@ -7,13 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Container, Key, Text } from '@earendil-works/pi-tui';
-import { SYMBOL, brand, completer, row, setMode } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, SYMBOL, brand, completer, row, setMode, toEnglishFields, toEnglishInstructions } from '@prjct.app/pi-tui-kit';
 import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
 import { DEFAULT_LIMITS, find, live, undelivered, unresolved } from './manager.ts';
 import { delegateResultView, needsAttention, jobView, ledgerLines, ledgerView, resultContent, themedJobLine, withBody } from './render.ts';
-import { getActiveRoot, registerHandle } from './host.ts';
+import { childMemory, getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
 import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
@@ -314,9 +314,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       const model = resolve(ask.model);
       if ('refused' in model) return { ok: false, text: model.refused };
       const workspace = await externalWorkspace(choice.profile, parent.cwd);
+      const asked = await englishFields({ subject: ask.subject, task: ask.task, context: ask.context });
       const decision = await jobs.delegate({
         role: choice.role, ...(choice.profile ? { agent: choice.profile.name } : {}),
-        subject: ask.subject, task: ask.task, context: ask.context,
+        subject: asked.subject.slice(0, 160), task: asked.task, context: asked.context,
         // A grandchild inherits what its parent was given, never more — tools,
         // and the wire: the whole tree talks on one file.
         tools: factoryTools(choice.profile, choice.role, roleTools(choice.role, parent.tools ?? READ_ONLY_TOOLS)), runner: state.settings.runner,
@@ -379,6 +380,16 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   });
 
   /**
+   * Every instruction a child receives is English. Text the parent model wrote
+   * is asked for in English at the source; this rewrites what still is not,
+   * and what the person typed, with the same cheapest model. English passes
+   * without a call, and a failed rewrite delivers the original.
+   */
+  const english = (text: string): Promise<string> => toEnglishInstructions(text, (system, user) => complete(system, user, ctx()));
+  const englishFields = <T extends Record<string, string | undefined>>(fields: T): Promise<T> =>
+    toEnglishFields(fields, (system, user) => complete(system, user, ctx()));
+
+  /**
    * Triage one typed prompt, and launch what it earns.
    *
    * The turn the prompt started is never waited on: the call runs beside it,
@@ -401,7 +412,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       const rootId = activeRoot();
       const decision = await jobs.delegate({
         role: subtask.role, subject: subtask.subject, task: subtask.task,
-        context: `The person asked the session you are assisting:\n${prompt.slice(0, 800)}`,
+        context: `The person asked the session you are assisting:\n${await english(prompt.slice(0, 800))}`,
         ...model, cwd: context.cwd, depth: 0, tools: inheritedTools(subtask.role), runner: state.settings.runner, key,
         ...(rootId ? { rootId } : {}),
       });
@@ -461,6 +472,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       wireRoot: options.wireRoot ?? directory,
       extensionPaths: extensionPaths(state.settings.extensionPackages, ctx().cwd),
       prepare: (job: Job) => prepareSession(job, directory),
+      memory: (job: Job, query: string) => childMemory(job.role, query),
     };
     const factory = options.makeRunner ?? (state.settings.runner === 'in-process' ? inProcessRunner : spawnRunner);
     return makeJobs(session, {
@@ -484,7 +496,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   const steerJob = async (jobId: string, message: string): Promise<boolean> => {
     if (!message.trim() || message.length > 4000) throw new Error('Send between 1 and 4,000 characters.');
-    const sent = await state.jobs?.steerTo(jobId, message) ?? false;
+    const sent = await state.jobs?.steerTo(jobId, await english(message)) ?? false;
     if (sent) {
       state.jobs?.question(jobId, undefined);
       state.jobs?.record(jobId, { kind: 'message', text: `You: ${message}` });
@@ -504,7 +516,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const model = resolve(`${original.provider}/${original.modelId}`);
     if ('refused' in model) throw new Error(model.refused);
     const result = await jobs.delegate({ role: original.role, ...(original.agent ? { agent: original.agent } : {}),
-      subject: original.subject, task: message,
+      subject: original.subject, task: await english(message),
       context: 'Continue the retained conversation. Previous reports are historical; return a new report for this request.',
       ...model, cwd: dir.cwd, ...(original.sourceCwd ? { sourceCwd: original.sourceCwd } : {}),
       ...(original.workspace ? { workspace: original.workspace } : {}), ...(original.patchFile ? { patchFile: original.patchFile } : {}),
@@ -533,7 +545,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       description: 'Start one separable job. Set agent to either a package-owned factory profile or a base role. Factory implementers and documenters '
         + 'write only in external snapshots under ~/.prjct/subagents; documentation requires an explicit user request. Factory agents never inherit Bash or third-party mutation tools. '
         + 'Base explorer and reviewer roles are read-only. A legacy worker may inherit active write tools and opt-in unrestricted Bash. The job reports evidence and ends; do not wait for it. '
-        + `Factory agents:\n${factoryCatalogue()}\n${hint}`,
+        + `${ENGLISH_RULE} Factory agents:\n${factoryCatalogue()}\n${hint}`,
       parameters: Type.Object({
         agent: StringEnum(DELEGATE_AGENTS, {
           description: 'The one delegation selector: a factory profile or a base role such as reviewer. Never send a separate role field.',
@@ -559,15 +571,16 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         if (topics === undefined) throw new Error('Specification clarification was cancelled.');
         const clarification = choice.profile?.name === 'specification-architect'
           ? `Operator clarification focus: ${topics.length ? topics.join(', ') : 'no additional topics selected'}. Ask concise follow-up questions only where consequential uncertainty remains.` : '';
-        const delegatedContext = [input.context, clarification].filter(Boolean).join('\n\n');
-        if (Buffer.byteLength(input.task, 'utf8') + Buffer.byteLength(delegatedContext, 'utf8') > state.settings.limits.taskBytes) throw new Error('Task and clarification context exceed the configured delegation limit.');
+        const given = await englishFields({ subject: String(input.subject), task: String(input.task), context: [input.context, clarification].filter(Boolean).join('\n\n') });
+        const delegatedContext = given.context;
+        if (Buffer.byteLength(given.task, 'utf8') + Buffer.byteLength(delegatedContext, 'utf8') > state.settings.limits.taskBytes) throw new Error('Task and clarification context exceed the configured delegation limit.');
         const workspace = await externalWorkspace(choice.profile, dir.cwd);
         // A job born inside a team thread is filed under it when a host that
         // knows about teams registered a provider; without one it stands alone.
         const rootId = activeRoot();
         const decision = await jobs.delegate({
           role: choice.role, ...(choice.profile ? { agent: choice.profile.name } : {}),
-          subject: input.subject, task: input.task, context: delegatedContext,
+          subject: given.subject.slice(0, 160), task: given.task, context: delegatedContext,
           ...model, cwd: workspace?.cwd ?? dir.cwd, ...(workspace ? workspace : {}),
           depth: 0, tools: factoryTools(choice.profile, choice.role), runner: state.settings.runner,
           // The same call twice admits one job, not a second identical child.
@@ -625,7 +638,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       + 'anything finished. Use result for full evidence, steer with a message to guide a live job, or resume with a message to continue a retained conversation. '
       + 'resolve marks a finished job\'s blockers as handled once you have dealt with them (it then no longer counts as unresolved). '
       + 'purge forgets finished jobs whose reports you already have, freeing the session job budget (a full budget purges them by itself); give jobId to purge one resolved blocker. '
-      + 'Never use status to wait: reports arrive in this conversation by themselves and wake the session when it is idle.',
+      + 'Never use status to wait: reports arrive in this conversation by themselves and wake the session when it is idle. '
+      + `Messages to a job: ${ENGLISH_RULE}`,
     parameters: Type.Object({
       action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume', 'purge', 'resolve'] as const),
       jobId: Type.Optional(Type.String({ maxLength: 128 })),
@@ -709,7 +723,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     label: 'Answer a subagent',
     description: 'Answer a question a subagent escalated to this session, naming it as the question '
       + 'named it. The answer is steered into the subagent, which was told not to wait — so answer '
-      + 'once, plainly, and if the decision is not yours either, say that instead.',
+      + `once, plainly, and if the decision is not yours either, say that instead. ${ENGLISH_RULE}`,
     parameters: Type.Object({
       name: Type.String({ minLength: 1, maxLength: 48 }),
       answer: Type.String({ minLength: 1, maxLength: 4000 }),

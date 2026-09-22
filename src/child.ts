@@ -5,10 +5,11 @@ import { StringEnum } from '@earendil-works/pi-ai';
 import { Type } from 'typebox';
 import { randomUUID } from 'node:crypto';
 import {
-  READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
+  READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   ReportSchema, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkReport, reportProblems, type DelegateAnswer,
 } from './schema.ts';
 import { post, recent } from './wire.ts';
+import { ENGLISH_RULE } from '@prjct.app/pi-tui-kit';
 
 /**
  * The only extension a child loads.
@@ -47,7 +48,8 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
     description: 'Return what you found and end this session. This is the only thing that reaches '
       + 'the session that asked for this work: nothing else written here is read by anyone. Give the '
       + 'acceptance criteria you derived from the task with the evidence for each, the findings, and '
-      + 'anything that blocked you. Report evidence, never approval or a sign-off.',
+      + 'anything that blocked you. If you changed files, list each in files with what changed, and the '
+      + 'checks you ran in checks; the code itself is in the files. Report evidence, never approval or a sign-off.',
     parameters: ReportSchema,
     async execute(_toolCallId: string, input: unknown) {
       // Validated here so the child can fix its own report while it still has
@@ -77,7 +79,7 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
       description: 'Ask for a second agent on a separable part of this task. Set agent to one base role or package-owned factory profile. '
         + 'It runs beside you and reports to the session that asked for your work, not to you, '
         + 'so do not wait for it and do not plan around its answer. Delegate only what is genuinely '
-        + 'separable; splitting work you could finish yourself costs more than it saves.',
+        + `separable; splitting work you could finish yourself costs more than it saves. ${ENGLISH_RULE}`,
       parameters: DelegateSchema,
       async execute(_toolCallId: string, input: unknown, _signal: unknown, _onUpdate: unknown, ctx: any) {
         // The parent decides. Asking it is the only honest answer to give the
@@ -128,12 +130,32 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
     description: 'Ask whoever asked for your work when you are stuck on a decision that is not '
       + 'yours. The question travels up the delegation tree; the answer arrives by itself. Never '
       + 'wait for it: carry on with what you can, and if nothing can continue without the answer, '
-      + `call ${REPORT_TOOL} with the question as a blocker.`,
+      + `call ${REPORT_TOOL} with the question as a blocker. ${ENGLISH_RULE}`,
     parameters: Type.Object({
       question: Type.String({ minLength: 1, maxLength: 2000 }),
     }),
     async execute(_toolCallId: string, input: any, _signal: unknown, _onUpdate: unknown, ctx: any) {
       const answered = await askParent(JSON.stringify({ kind: 'ask', question: String(input?.question ?? '') }), ctx);
+      const answer = readAnswer(answered);
+      return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
+    },
+  } as Parameters<ExtensionAPI['registerTool']>[0]);
+
+  /**
+   * Project memory, asked of the parent. The answer is what the child's role
+   * may see; an empty answer is an answer, not a fault to work around.
+   */
+  pi.registerTool({
+    name: MEMORY_TOOL,
+    label: 'Project memory',
+    description: 'Look up what this project remembers about something you found: where things live, how to run '
+      + 'them, what is known to break, which rules hold. You get records about the project, not conclusions about '
+      + `your task; check anything that matters against the code. Read-only. ${ENGLISH_RULE}`,
+    parameters: Type.Object({
+      query: Type.String({ minLength: 1, maxLength: 1000 }),
+    }),
+    async execute(_toolCallId: string, input: any, _signal: unknown, _onUpdate: unknown, ctx: any) {
+      const answered = await askParent(JSON.stringify({ kind: 'memory', query: String(input?.query ?? '') }), ctx);
       const answer = readAnswer(answered);
       return { content: [{ type: 'text' as const, text: answer.text }], details: answer };
     },
@@ -155,7 +177,7 @@ export function installGuard(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.
       label: 'Message a sibling',
       description: 'Send a message to a sibling working beside you on the same task, by name, or '
         + '"*" for all of them. Coordination, not conversation: say what you found or what you need, '
-        + 'once. There is no parent address here — a question for the hierarchy goes through the ask channel.',
+        + `once. There is no parent address here — a question for the hierarchy goes through the ask channel. ${ENGLISH_RULE}`,
       parameters: Type.Object({
         to: Type.String({ minLength: 1, maxLength: 48 }),
         subject: Type.String({ minLength: 1, maxLength: 160 }),

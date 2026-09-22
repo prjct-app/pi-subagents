@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { visibleWidth } from '@earendil-works/pi-tui';
-import { MultiSelectChecklist } from '../src/checklist.ts';
+import { SPECIFICATION_CHECKLIST } from '../src/checklist.ts';
+import { createChecklist, type ChecklistResult } from '@prjct.app/pi-tui-kit';
 import { FACTORY_AGENTS, factoryCatalogue, loadFactoryAgent } from '../src/factory.ts';
 import { cleanupExternalWorkspaces, createExternalWorkspace, finalizeExternalWorkspace } from '../src/workspace.ts';
 import { artifactRoot, storageRoot, workspaceRoot } from '../src/storage.ts';
@@ -28,14 +29,15 @@ test('package state defaults outside Pi and separates state, workspaces, and art
 });
 
 test('specification clarification supports selecting one or many topics', () => {
-  const selected: Array<string[] | undefined> = [];
-  const checklist = new MultiSelectChecklist({ terminal: { rows: 12 }, requestRender() {} } as any, { fg: (_: string, text: string) => text, bold: (text: string) => text } as any, value => selected.push(value));
-  checklist.handleInput('\r'); assert.deepEqual(selected, []); assert.match(checklist.render(40).join('\n'), /Select at least one/);
+  const selected: Array<ChecklistResult | undefined> = [];
+  const checklist = createChecklist(SPECIFICATION_CHECKLIST, { terminal: { rows: 12 }, requestRender() {} } as any, { fg: (_: string, text: string) => text, bold: (text: string) => text } as any, value => selected.push(value));
+  checklist.handleInput('\r'); assert.deepEqual(selected, []); assert.match(checklist.render(40).join('\n'), /Select at least 1/);
+  checklist.handleInput('\x1b[B');
   checklist.handleInput(' ');
   checklist.handleInput('\x1b[B');
   checklist.handleInput(' ');
   checklist.handleInput('\r');
-  assert.deepEqual(selected, [['Problem and scope', 'Users and journeys']]);
+  assert.deepEqual(selected, [{ ids: ['Problem and scope', 'Users and journeys'] }]);
   assert.ok(checklist.render(40).every(line => visibleWidth(line) <= 40));
   for (const _ of Array.from({ length: 12 })) checklist.handleInput('\x1b[B');
   const compact = checklist.render(40);

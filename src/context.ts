@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ASK_TOOL, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, type Role } from './schema.ts';
+import { ASK_TOOL, DELEGATE_TOOL, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, type Role } from './schema.ts';
 
 /**
  * What a child is told, and what it is allowed to be told.
@@ -156,8 +156,11 @@ export function childPrompt(input: {
   tools?: readonly string[];
   /** When true, the sibling channel tools exist in this process. */
   wired?: boolean;
+  /** The project memory this child's role may see, already rendered by pi-memory. */
+  memory?: string;
 }): string {
   const context = input.context?.trim();
+  const memory = input.memory?.trim();
   const profile = input.profile?.trim();
   const inherited = input.tools ?? READ_ONLY_TOOLS;
   /** File mutation and an unrestricted shell are separate capabilities. */
@@ -168,6 +171,7 @@ export function childPrompt(input: {
     `${REPORT_TOOL} — return the report and end. This is the only way anything you learn leaves this process.`,
     `${MODEL_TOOL} — list the models this machine can run, or switch to one. You start on the model `
       + 'the session that asked had; you are the one doing this work, so the choice is yours. Switching is instant.',
+    `${MEMORY_TOOL} — look up what this project remembers about something you found. Records, not conclusions.`,
     `${ASK_TOOL} — ask whoever asked for your work when a decision is not yours. The answer arrives `
       + 'by itself; never wait for it. Carry on, or report the question as a blocker.',
     ...(input.canDelegate
@@ -228,6 +232,7 @@ export function childPrompt(input: {
     '',
     '## What you were given',
     context ? context : 'Nothing beyond the task above. Anything else, you find or you report missing.',
+    ...(memory ? ['', '## What this project remembers', memory] : []),
   ].join('\n');
 }
 

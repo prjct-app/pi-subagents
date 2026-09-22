@@ -7,7 +7,7 @@ import { factoryAgent } from './factory.ts';
 import { read as readWire } from './wire.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
 import {
-  READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
+  READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk,
   type DelegateAnswer, type DelegateAsk, type Job, type ModelAsk, type Usage,
 } from './schema.ts';
@@ -184,6 +184,27 @@ export function selectChildTools(active: readonly string[], allowBash: boolean):
   return active.filter(name => name !== 'bash' || (allowBash && writer));
 }
 
+/** A lookup never holds a child up for long, and a failed one is an empty memory. */
+const MEMORY_DEADLINE_MS = 5_000;
+
+/** The memory a child starts with: its role's view, searched with the task it was given. */
+export async function taskMemory(job: Job, memory: ((job: Job, query: string) => Promise<string>) | undefined): Promise<string> {
+  if (!memory) return '';
+  const query = `${job.subject}\n${job.task}`.slice(0, 1000);
+  return within(MEMORY_DEADLINE_MS, memory(job, query).catch(() => ''), '');
+}
+
+/** A child's own lookup, answered with its role's view. */
+export async function rememberFor(job: Job, query: unknown,
+  memory: ((job: Job, query: string) => Promise<string>) | undefined): Promise<DelegateAnswer> {
+  if (typeof query !== 'string' || !query.trim() || query.length > 1000) {
+    return { ok: false, text: 'That lookup was not understood. It needs a query, in words.' };
+  }
+  if (!memory) return { ok: true, text: 'This project has no memory to read from here.' };
+  const found = await within(MEMORY_DEADLINE_MS, memory(job, query).catch(() => ''), '');
+  return { ok: true, text: found || 'Nothing in project memory matches that. Find it in the code.' };
+}
+
 /** One `pi` child, spoken to over RPC. */
 export function spawnRunner(options: {
   guardPath: string;
@@ -208,6 +229,11 @@ export function spawnRunner(options: {
   wireRoot?: string;
   /** A child's question, escalated. Absent means the child is told to report. */
   onAsk?: (job: Job, question: string) => Promise<DelegateAnswer>;
+  /**
+   * Project memory for this job's role, rendered; '' when there is none. Asked
+   * once with the task before the child starts, and again for each lookup.
+   */
+  memory?: (job: Job, query: string) => Promise<string>;
   /** How often sibling mail is polled. Injected by the tests; 2s in life. */
   wireMs?: number;
   /** Injected so tests never reach for a real binary. */
@@ -228,7 +254,7 @@ export function spawnRunner(options: {
     const inherited = options.tools ?? job.tools ?? READ_ONLY_TOOLS;
     const permitted = selectChildTools(inherited, process.env.PI_SUBAGENTS_ALLOW_BASH === '1');
     const wired = options.wireRoot !== undefined && job.wire !== undefined;
-    const tools = [...new Set([...permitted, REPORT_TOOL, MODEL_TOOL, ASK_TOOL,
+    const tools = [...new Set([...permitted, REPORT_TOOL, MODEL_TOOL, ASK_TOOL, MEMORY_TOOL,
       ...(mayDelegate ? [DELEGATE_TOOL] : []),
       ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : []),
     ])];
@@ -358,9 +384,10 @@ export function spawnRunner(options: {
         try { return await options.onAsk(job, (ask as { question: string }).question); }
         catch { return { ok: false, text: 'The question could not be sent. Report what blocks you instead.' }; }
       }
+      if (kind === 'memory') return rememberFor(job, (ask as { query?: unknown }).query, options.memory);
       if (kind !== 'delegate') {
         return { ok: false, text: 'That request was not understood, so nothing was started. '
-          + 'It needs a kind: delegate, models, use_model, or ask.' };
+          + 'It needs a kind: delegate, models, use_model, memory, or ask.' };
       }
       if (!options.onDelegate || !mayDelegate) {
         return { ok: false, text: 'Delegation is not available from here. Report what you found and what you could not reach.' };
@@ -575,8 +602,9 @@ export function spawnRunner(options: {
       }
     }
     if (job.resumeSession) state.baseline = await spent();
+    const memory = await taskMemory(job, options.memory);
     const taken = await within(START_DEADLINE_MS,
-      send({ type: 'prompt', message: childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired,
+      send({ type: 'prompt', message: childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired, memory,
         ...(job.agent ? { profile: factoryAgent(job.agent).instructions } : {}) }) }),
       { success: false, error: 'it never answered' } as Record<string, unknown>);
     if (taken.success !== true) {

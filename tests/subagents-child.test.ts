@@ -48,6 +48,9 @@ test('a report that does not match the contract is thrown back at the child, not
   await assert.rejects(() => tool.execute('call_2', report({ criteria: 'all of them' })),
     /criteria/);
 
+  const changed = report({ files: [{ path: 'src/retry.ts', action: 'modified', what: 'backoff doubles' }], checks: [{ command: 'npm test', passed: true }] });
+  assert.deepEqual((await tool.execute('call_5', changed)).details, changed, 'files and checks travel as data');
+
   const accepted = await tool.execute('call_3', report());
   assert.deepEqual(accepted.details, report(), 'an accepted report travels as it was written');
   assert.match(accepted.content[0].text, /session is over/);

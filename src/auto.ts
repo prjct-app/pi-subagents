@@ -32,7 +32,7 @@ Answer with JSON and nothing else: {"complex": boolean, "subtasks": [{"role": "e
 
 Complex means the task spans several files or areas that can be investigated independently, and reading them all in one context would cost more than splitting it saves. Not complex: questions, single-file changes, commands, explanations, anything one lookup answers.
 
-At most 3 subtasks. Each must stand alone: name the directories or files to read and exactly what to report back. Never split what one reader would read in one pass. When in doubt, not complex.`;
+Write subject and task in plain, simple English, whatever language the task is in. At most 3 subtasks. Each must stand alone: name the directories or files to read and exactly what to report back. Never split what one reader would read in one pass. When in doubt, not complex.`;
 
 /** The model's answer, parsed strictly; anything unreadable is "not complex". */
 export function parseTriage(raw: string): Triage {

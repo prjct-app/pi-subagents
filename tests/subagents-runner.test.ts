@@ -158,7 +158,7 @@ test('the child starts with ambient discovery off, and able to read and to repor
     '--no-extensions', '-e', '/owned/guard.ts',
     '--no-skills', '--no-prompt-templates',
     '--no-approve',
-    '--tools', `read,grep,find,ls,${REPORT_TOOL},subagent_model,subagent_ask`,
+    '--tools', `read,grep,find,ls,${REPORT_TOOL},subagent_model,subagent_ask,subagent_memory`,
   ]);
   // `--tools` is an allowlist over extension tools too, so a report tool left
   // out of it is a child that works perfectly and then fails for saying nothing.
@@ -605,4 +605,69 @@ test('observed usage lets a report settle without waiting for the RPC statistics
   await until('report settles', () => ended() !== undefined);
   assert.deepEqual((ended() as any).usage, { tokens: 42, cost: 0.001, calls: 1 });
   assert.equal(child.sent.some((message: any) => message.type === 'get_session_stats'), false);
+});
+
+test('a child starts with its role\'s memory, searched with its task, and can ask for more', async () => {
+  const asked: { role: string; query: string }[] = [];
+  const memory = async (given: Job, query: string) => {
+    asked.push({ role: given.role, query });
+    return /pump/.test(query) ? `<project_memory for="${given.role}">\n- (fact) pump() lives in src/jobs.ts\n</project_memory>` : '';
+  };
+  const run = await started({ depth: 0, role: 'reviewer', subject: 'check pump', task: 'Review pump() for races.' }, live, { memory });
+  await until('the prompt is sent', () => run.child.sent.some((message: any) => message.type === 'prompt'));
+  const prompt = run.child.sent.find((message: any) => message.type === 'prompt').message;
+  assert.match(prompt, /## What this project remembers\n<project_memory for="reviewer">/);
+  assert.deepEqual(asked[0], { role: 'reviewer', query: 'check pump\nReview pump() for races.' });
+  assert.ok(run.args.at(-1)?.includes('subagent_memory'), 'the lookup tool is in the allowlist');
+
+  run.child.answer('prompt', { success: true });
+  await until('it is running', () => run.events.some(event => event.type === 'running'));
+  run.child.say({ type: 'extension_ui_request', id: 'mem1', method: 'input',
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'memory', query: 'where does pump live' })}` });
+  await until('the lookup is answered', () => replies(run.child).length > 0);
+  assert.deepEqual(asked[1], { role: 'reviewer', query: 'where does pump live' }, 'the parent filters by the job\'s role, not the child\'s word');
+  assert.match(JSON.parse(replies(run.child)[0].value).text, /lives in src\/jobs.ts/);
+
+  run.child.say({ type: 'extension_ui_request', id: 'mem2', method: 'input',
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'memory', query: 'unrelated' })}` });
+  await until('the empty lookup is answered', () => replies(run.child).length > 1);
+  assert.deepEqual(JSON.parse(replies(run.child)[1].value), { ok: true, text: 'Nothing in project memory matches that. Find it in the code.' });
+
+  run.child.say({ type: 'extension_ui_request', id: 'mem3', method: 'input', title: `${ASK_PREFIX}{"kind":"memory"}` });
+  await until('the bad lookup is answered', () => replies(run.child).length > 2);
+  assert.equal(JSON.parse(replies(run.child)[2].value).ok, false);
+});
+
+test('a memory that fails or is absent never holds a child up', async () => {
+  const run = await started({ depth: 0 }, live, { memory: async () => { throw new Error('database locked'); } });
+  await until('the prompt is sent', () => run.child.sent.some((message: any) => message.type === 'prompt'));
+  assert.doesNotMatch(run.child.sent.find((message: any) => message.type === 'prompt').message, /What this project remembers/);
+  run.child.answer('prompt', { success: true });
+  await until('it is running', () => run.events.some(event => event.type === 'running'));
+
+  const alone = await started({ depth: 0 }, live, {});
+  await until('it is running', () => alone.child.sent.some((message: any) => message.type === 'prompt'));
+  alone.child.answer('prompt', { success: true });
+  await until('it is running', () => alone.events.some(event => event.type === 'running'));
+  alone.child.say({ type: 'extension_ui_request', id: 'mem4', method: 'input',
+    title: `${ASK_PREFIX}${JSON.stringify({ kind: 'memory', query: 'anything' })}` });
+  await until('the lookup is answered', () => replies(alone.child).length > 0);
+  assert.match(JSON.parse(replies(alone.child)[0].value).text, /no memory/);
+});
+
+test('the parent reads memory through the view pi-memory publishes, and nothing when it is absent', async () => {
+  const { childMemory } = await import('../src/host.ts');
+  const key = Symbol.for('prjct.memory');
+  const space = globalThis as unknown as Record<symbol, unknown>;
+  const previous = space[key];
+  try {
+    delete space[key];
+    assert.equal(await childMemory('explorer', 'x'), '');
+    const seen: unknown[] = [];
+    space[key] = { childView: async (request: unknown) => { seen.push(request); return { text: 'remembered' }; } };
+    assert.equal(await childMemory('worker', 'the task'), 'remembered');
+    assert.deepEqual(seen, [{ role: 'worker', query: 'the task' }]);
+  } finally {
+    space[key] = previous;
+  }
 });

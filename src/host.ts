@@ -22,6 +22,19 @@ export type AgentsRegistry = {
 
 const KEY = Symbol.for('prjct.agents');
 
+/**
+ * pi-memory publishes a read-only, role-filtered view here. Absent when
+ * pi-memory is not installed, and then a child simply starts without memory.
+ */
+type ChildMemoryView = (request: { role: string; query?: string; signal?: AbortSignal }) => Promise<{ text: string }>;
+const MEMORY_KEY = Symbol.for('prjct.memory');
+
+export async function childMemory(role: string, query: string): Promise<string> {
+  const host = (globalThis as unknown as Record<symbol, { childView?: ChildMemoryView } | undefined>)[MEMORY_KEY];
+  if (typeof host?.childView !== 'function') return '';
+  return (await host.childView({ role, query })).text;
+}
+
 export function registry(): AgentsRegistry {
   const space = globalThis as unknown as Record<symbol, AgentsRegistry | undefined>;
   const found = space[KEY];

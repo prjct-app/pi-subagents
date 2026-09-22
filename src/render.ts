@@ -77,8 +77,12 @@ export function reportLines(job: Job): string[] {
   const findings = (report.findings ?? []).slice(0, FINDINGS)
     .map(item => `- ${one(item.detail)}${item.file ? ` (${one(item.file, 200)}${item.line ? `:${item.line}` : ''})` : ''}`);
   const blockers = (report.blockers ?? []).slice(0, BLOCKERS).map(item => `- ${one(item)}`);
+  const files = (report.files ?? []).slice(0, FINDINGS).map(item => `- ${item.action} ${one(item.path, 200)} — ${one(item.what)}`);
+  const checks = (report.checks ?? []).map(item => `- ${item.passed ? '✓' : '✗'} ${one(item.command, 200)}`);
   return [
     `Summary: ${one(report.summary, SUMMARY)}`,
+    ...(files.length > 0 ? ['Files:', ...files] : []),
+    ...(checks.length > 0 ? ['Checks:', ...checks] : []),
     `Criteria: ${met(report, 'yes')} met, ${met(report, 'no')} not met, ${met(report, 'unknown')} unknown`,
     ...criteria,
     ...(findings.length > 0 ? ['Findings:', ...findings] : []),

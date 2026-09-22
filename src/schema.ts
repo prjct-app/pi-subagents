@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Type } from 'typebox';
 import { Compile } from 'typebox/compile';
+import { ChangeReplySchema } from '@prjct.app/pi-tui-kit';
 
 /**
  * Ephemeral subagents: parent-owned jobs that start when a session delegates a
@@ -96,6 +97,16 @@ export const WIRE_INBOX_TOOL = 'subagent_inbox';
  */
 export const ASK_TOOL = 'subagent_ask';
 
+/**
+ * Project memory, read for the child by its parent.
+ *
+ * A child loads no extensions, so it cannot open memory itself. The parent
+ * answers through pi-memory's child view, which filters by the child's role:
+ * facts about the terrain reach every child, verdicts never reach a reviewer.
+ * It is read-only; nothing a child says becomes memory from here.
+ */
+export const MEMORY_TOOL = 'subagent_memory';
+
 /** A child's question, on the wire to its parent. */
 export const QuestionAskSchema = Type.Object({
   kind: Type.Literal('ask'),
@@ -151,7 +162,7 @@ export const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls'] as const;
  * alike, so a child whose report tool is not named here cannot report at all —
  * it would work perfectly and then fail for having said nothing.
  */
-export const CHILD_TOOLS: readonly string[] = [...READ_ONLY_TOOLS, REPORT_TOOL, MODEL_TOOL, ASK_TOOL];
+export const CHILD_TOOLS: readonly string[] = [...READ_ONLY_TOOLS, REPORT_TOOL, MODEL_TOOL, ASK_TOOL, MEMORY_TOOL];
 
 /**
  * Every state a job can be in. There is no state that waits forever: a job
@@ -187,6 +198,10 @@ export const ReportSchema = Type.Object({
   }), { maxItems: 40 }),
   /** What stopped it, and exactly what it needs. The parent owns these. */
   blockers: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 10 }),
+  /** Files it changed, as data: the same shape every reply in PI uses. Omitted when it changed nothing. */
+  files: Type.Optional(ChangeReplySchema.properties.files),
+  /** Checks it actually ran, and whether each passed. */
+  checks: Type.Optional(ChangeReplySchema.properties.checks),
 });
 export type Report = {
   outcome: 'completed' | 'blocked' | 'failed';
@@ -194,6 +209,8 @@ export type Report = {
   criteria: { criterion: string; met: Met; evidence: string }[];
   findings: { detail: string; file?: string; line?: number }[];
   blockers: string[];
+  files?: { path: string; action: 'created' | 'modified' | 'deleted'; what: string }[];
+  checks?: { command: string; passed: boolean }[];
 };
 
 /** Observed from the child's own reporting. Absent is unknown, never zero. */

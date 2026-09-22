@@ -4,9 +4,9 @@ import { agentHome, roleTools } from './config.ts';
 import { activityOf } from './activity.ts';
 import { childPrompt, neutralCatalogue } from './context.ts';
 import { factoryAgent } from './factory.ts';
-import { within, type Runner, type RunnerEvent, type spawnRunner } from './runner.ts';
+import { rememberFor, taskMemory, within, type Runner, type RunnerEvent, type spawnRunner } from './runner.ts';
 import { read as readWire } from './wire.ts';
-import { ASK_TOOL, DELEGATE_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk, type DelegateAnswer } from './schema.ts';
+import { ASK_TOOL, DELEGATE_TOOL, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk, type DelegateAnswer } from './schema.ts';
 
 type Options = Parameters<typeof spawnRunner>[0];
 
@@ -19,7 +19,7 @@ export function inProcessRunner(options: Options): Runner {
     // Admission already removed ambient extension tools unless their packages
     // were configured explicitly; keep that admitted set here.
     const permitted = roleTools(job.role, job.tools ?? READ_ONLY_TOOLS, undefined, true);
-    const tools = [...new Set([...permitted, REPORT_TOOL, MODEL_TOOL, ASK_TOOL, ...(mayDelegate ? [DELEGATE_TOOL] : []), ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : [])])];
+    const tools = [...new Set([...permitted, REPORT_TOOL, MODEL_TOOL, ASK_TOOL, MEMORY_TOOL, ...(mayDelegate ? [DELEGATE_TOOL] : []), ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : [])])];
     const stop = (): Promise<void> => {
       if (slot.stop) return slot.stop;
       const work = (async () => {
@@ -57,6 +57,7 @@ export function inProcessRunner(options: Options): Runner {
         const ask = JSON.parse(payload);
         if (ask.kind === 'models') return { ok: true, text: neutralCatalogue(options.catalogue?.() ?? []) };
         if (ask.kind === 'ask' && checkQuestionAsk(ask) && options.onAsk) return options.onAsk(job, ask.question);
+        if (ask.kind === 'memory') return rememberFor(job, ask.query, options.memory);
         if (ask.kind === 'delegate' && checkAsk(ask) && mayDelegate && options.onDelegate) return options.onDelegate(job, ask);
         if (ask.kind === 'use_model' && checkModelAsk(ask) && slot.session) {
           const known = options.catalogue?.();
@@ -141,7 +142,8 @@ export function inProcessRunner(options: Options): Runner {
         }, options.wireMs ?? 2_000);
         slot.timer.unref?.();
       }
-      void session.prompt(childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired,
+      const memory = await taskMemory(job, options.memory);
+      void session.prompt(childPrompt({ ...job, tools: permitted, canDelegate: mayDelegate, wired, memory,
         ...(job.agent ? { profile: factoryAgent(job.agent).instructions } : {}) })).catch(error => terminal({ type: 'failed', reason: String(error).slice(0, 500) }));
     } catch (error) {
       terminal({ type: 'failed', reason: String(error).slice(0, 500) });

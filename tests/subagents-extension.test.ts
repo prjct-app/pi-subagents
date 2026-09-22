@@ -113,6 +113,20 @@ test('delegating starts a child and says plainly not to wait for it', async () =
   assert.equal(h.ledger().jobs.length, 1, 'and the ledger reaches the session file');
 });
 
+test('a child always receives its instructions in English, whatever language the parent wrote', async () => {
+  const asked: string[] = [];
+  const h = host({ complete: async (_system: string, user: string) => { asked.push(user); return 'Read src/importer.ts. Report why rows with a BOM are dropped.'; } });
+  await h.emit('session_start', { reason: 'resume' });
+  const english = (await h.delegate()).details as Job;
+  assert.equal(english.task, 'Read src/importer.ts.');
+  assert.equal(asked.length, 0, 'English costs no call');
+  const spanish = (await h.delegate({ task: 'Lee src/importer.ts y dime por qué se pierden las filas con BOM' })).details as Job;
+  assert.equal(spanish.task, 'Read src/importer.ts. Report why rows with a BOM are dropped.');
+  assert.deepEqual(asked, ['Lee src/importer.ts y dime por qué se pierden las filas con BOM']);
+  await h.tools.get('agent_jobs').execute('s', { action: 'steer', jobId: spanish.id, message: 'Revisa también el parser y dime que falla' });
+  assert.equal(h.of(spanish).steers.at(-1), 'Read src/importer.ts. Report why rows with a BOM are dropped.', 'steers are rewritten too');
+});
+
 test('agent_delegate has one required selector and tolerates calls from the old two-field schema', async () => {
   const h = host(); await h.emit('session_start', { reason: 'resume' });
   const schema = h.tools.get('agent_delegate').parameters;

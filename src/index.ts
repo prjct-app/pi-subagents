@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Container, Key, Text } from '@earendil-works/pi-tui';
-import { ENGLISH_RULE, SYMBOL, brand, completer, row, setMode, toEnglishFields, toEnglishInstructions } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, SYMBOL, brand, completer, row, sessionComplete, setMode, toEnglishFields, toEnglishInstructions } from '@prjct.app/pi-tui-kit';
 import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
@@ -382,12 +382,15 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   /**
    * Every instruction a child receives is English. Text the parent model wrote
    * is asked for in English at the source; this rewrites what still is not,
-   * and what the person typed, with the same cheapest model. English passes
+   * and what the person typed, with the session's own model, never a cheaper
+   * one that would blur the task before the child reads it. English passes
    * without a call, and a failed rewrite delivers the original.
    */
-  const english = (text: string): Promise<string> => toEnglishInstructions(text, (system, user) => complete(system, user, ctx()));
+  const translate = (system: string, user: string): Promise<string> =>
+    options.complete ? options.complete(system, user, ctx()) : sessionComplete(ctx())(system, user);
+  const english = (text: string): Promise<string> => toEnglishInstructions(text, translate);
   const englishFields = <T extends Record<string, string | undefined>>(fields: T): Promise<T> =>
-    toEnglishFields(fields, (system, user) => complete(system, user, ctx()));
+    toEnglishFields(fields, translate);
 
   /**
    * Triage one typed prompt, and launch what it earns.

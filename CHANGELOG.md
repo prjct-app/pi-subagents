@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Start every subagent admitted by the default 64-job session budget in parallel instead of holding all but two in a queue; return the post-launch state so active entities no longer render as queued.
-- Theme generated subagent names around Miles Morales's Spider-Verse and the wider Marvel universe.
+- Theme generated subagent names around the whole Matrix saga: the four films, The Animatrix, Enter the Matrix, The Matrix Online, and The Matrix Comics.
 - Replace the conflicting `agent`/`role` delegation selectors with one required `agent` selector that accepts factory profiles and base roles. Legacy calls remain accepted, and rejected calls render as failures instead of `Job unavailable`.
 - Publish the agents mode through `@prjct.app/pi-tui-kit` (`◆ agents ● n` on the shared mode line that p-ui draws) instead of drawing a separate widget.
 - Give an idle child one prompt to call `subagent_report` when it settles without reporting. An accepted RPC steer starts no turn after `agent_settled`, so completed research was being discarded as a failed job.

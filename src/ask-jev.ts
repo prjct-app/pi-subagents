@@ -116,6 +116,24 @@ async function pooled<T, R>(items: readonly T[], limit: number, task: (item: T) 
   return batches.reduce<Promise<R[]>>(async (done, batch) => [...await done, ...await Promise.all(batch.map(task))], Promise.resolve([]));
 }
 
+/**
+ * The one call both processes make: resolve the key once, answer, or say why
+ * it cannot. The parent and the child register the same tool around this, so
+ * a missing key is the same sentence wherever the question is asked.
+ */
+export async function runAskJev(
+  ready: () => Promise<Jev | undefined>,
+  input: AskJevInput,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
+  const jev = await ready();
+  if (!jev) throw new Error('No TypeSafe key is set, so Jev cannot answer. Read the files instead.');
+  const result = await askJev(jev, input, cwd, signal);
+  if ('error' in result && !('results' in result)) throw new Error(String(result.error));
+  return result;
+}
+
 /** One call over everything, or one call per file when `each` is set. */
 export async function askJev(jev: Jev, input: AskJevInput, cwd: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const questions = questionFor(input);

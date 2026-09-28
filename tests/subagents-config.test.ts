@@ -43,6 +43,14 @@ test('readers cannot gain mutation, shell or unknown extension capabilities', ()
   assert.deepEqual(roleTools('worker', ['read', 'bash'], true), ['read']);
 });
 
+test('judgement is inherited like a way of reading, never like an extension tool', () => {
+  const active = ['read', 'grep', 'edit', 'bash', 'ask_jev', 'remote_mutation'];
+  assert.deepEqual(roleTools('explorer', active, true), ['read', 'grep', 'ask_jev'],
+    'ask_jev reads for the reader and never writes, so a reader keeps it');
+  assert.deepEqual(roleTools('reviewer', active, true), ['read', 'grep', 'ask_jev']);
+  assert.deepEqual(roleTools('worker', active, false), ['read', 'grep', 'edit', 'ask_jev']);
+});
+
 test('retained continuation forks a conversation without changing its source', async t => {
   const root = await fixture(t); const original = job(root); const dir = sessionRoot('parent', root);
   const file = await prepareSession(original, dir);

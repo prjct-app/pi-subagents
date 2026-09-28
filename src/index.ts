@@ -17,13 +17,13 @@ import { childMemory, getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
 import { AUTO_MAX, COMPLEX_QUESTION, TRIAGE_SYSTEM, parseTriage, ruledOut, worthTriaging } from './auto.ts';
-import { ASK_JEV_DESCRIPTION, ASK_JEV_TOOL, AskJevSchema, askJev, headline, kindOf } from './ask-jev.ts';
+import { ASK_JEV_DESCRIPTION, ASK_JEV_TOOL, AskJevSchema, headline, kindOf, runAskJev } from './ask-jev.ts';
 import { connectJev, type ConnectJev, type Jev } from './jev.ts';
 import { selectSpecificationTopics } from './checklist.ts';
 import { FACTORY_AGENTS, factoryAgent, factoryCatalogue, type FactoryAgent } from './factory.ts';
 import { cleanupExternalWorkspaces, createExternalWorkspace, discardExternalWorkspace, finalizeExternalWorkspace, type ExternalWorkspace } from './workspace.ts';
 import { spawnRunner } from './runner.ts';
-import { DELEGATE_AGENTS, READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger, type Role } from './schema.ts';
+import { DELEGATE_AGENTS, READ_ONLY_ABILITIES, READ_ONLY_TOOLS, ROLES, checkLedger, isTerminal, type DelegateAnswer, type DelegateAsk, type Job, type Ledger, type Role } from './schema.ts';
 
 /**
  * pi-subagents: ephemeral subagents a session delegates to, usable on their
@@ -223,14 +223,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       const active = pi.getActiveTools().filter(name => name !== 'agent_delegate' && name !== 'agent_jobs');
       return roleTools(role, active, undefined, state.settings.extensionPackages.length > 0);
     } catch {
-      return [...READ_ONLY_TOOLS];
+      return [...READ_ONLY_ABILITIES];
     }
   };
 
   const factoryTools = (profile: FactoryAgent | undefined, role: Role, available = inheritedTools(role)): string[] => {
     if (!profile) return available;
-    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write'];
-    return available.filter(tool => safe.includes(tool) && (role === 'worker' || (READ_ONLY_TOOLS as readonly string[]).includes(tool)));
+    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', ASK_JEV_TOOL];
+    return available.filter(tool => safe.includes(tool) && (role === 'worker' || READ_ONLY_ABILITIES.includes(tool)));
   };
   const resolveProfile = (agent?: string, legacyRole?: Role): { role: Role; profile?: FactoryAgent } => {
     // agent is the sole public selector. role is accepted only so calls emitted
@@ -788,10 +788,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     description: ASK_JEV_DESCRIPTION,
     parameters: AskJevSchema,
     async execute(_toolCallId: string, input: any, signal?: AbortSignal) {
-      const jev = await state.jev;
-      if (!jev) throw new Error('No TypeSafe key is set, so Jev cannot answer. Read the files instead.');
-      const result = await askJev(jev, input, ctx().cwd, signal);
-      if ('error' in result && !('results' in result)) throw new Error(String(result.error));
+      const result = await runAskJev(async () => state.jev, input, ctx().cwd, signal);
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], details: { input, result } };
     },
     renderShell: 'self',

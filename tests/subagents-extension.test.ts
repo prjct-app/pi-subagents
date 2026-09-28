@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installJobs } from '../src/index.ts';
+import { ASK_JEV_TOOL } from '../src/ask-jev.ts';
 import type { ConnectJev } from '../src/jev.ts';
 import type { Handle, Runner, RunnerEvent } from '../src/runner.ts';
 import type { Job, Report } from '../src/schema.ts';
@@ -619,6 +620,28 @@ test('ask_jev leaves the prompt when there is no key, and answers without return
   const result = await present.tools.get('ask_jev').execute('j1', { question: 'Does `content` validate tokens?', paths: ['session.ts'] });
   assert.deepEqual(JSON.parse(result.content[0].text), { answer: 'yes', p_yes: 0.97 });
   assert.equal(result.content[0].text.includes('verify'), false);
+});
+
+test('a child inherits ask_jev when this session can answer it, and nothing when it cannot', async (t) => {
+  const answered = host({ jev: async () => async () => ({ answer: { type: 'noul', noul: 0.5 } }) });
+  answered.activeTools.names.push(ASK_JEV_TOOL);
+  await answered.emit('session_start', { reason: 'resume' });
+  await settleTick();
+  assert.ok(answered.activeTools.names.includes(ASK_JEV_TOOL), 'the key is there, so the tool stays in the prompt');
+  const explorer = (await answered.delegate({ agent: 'explorer' })).details as Job;
+  assert.ok(explorer.tools?.includes(ASK_JEV_TOOL), 'the readers that read the most are the ones that need it');
+  const factory = (await answered.delegate({ agent: 'product-discovery', subject: 'Validate the problem', task: 'Research the user need.' })).details as Job;
+  assert.ok(factory.tools?.includes(ASK_JEV_TOOL), 'a factory reader judges before it opens files too');
+  await answered.emit('session_shutdown');
+
+  const keyless = host();
+  keyless.activeTools.names.push(ASK_JEV_TOOL);
+  await keyless.emit('session_start', { reason: 'resume' });
+  await settleTick();
+  const plain = (await keyless.delegate()).details as Job;
+  assert.equal(plain.tools?.includes(ASK_JEV_TOOL), false,
+    'no key: a child is never given a tool it could not call');
+  await keyless.emit('session_shutdown');
 });
 
 test('failed completion delivery retries while idle without duplicate report entries', async () => {

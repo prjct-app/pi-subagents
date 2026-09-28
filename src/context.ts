@@ -134,6 +134,8 @@ export const roleBrief = (role: Role): string => ROLE_BRIEF[role];
 /** The one line each well-known tool gets; anything else is named as given. */
 const TOOL_BLURB: Record<string, string> = {
   read: 'read — open a file under the working directory.',
+  ask_jev: 'ask_jev — ask a fast judgement model one question about many files at once and get the answer and '
+    + 'its probability, never the files. Use it to decide what is worth opening; read the file when you need the code itself.',
   grep: 'grep — search file contents under the working directory.',
   find: 'find — find files by name under the working directory.',
   ls: 'ls — list a directory under the working directory.',

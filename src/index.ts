@@ -16,7 +16,9 @@ import { delegateResultView, needsAttention, jobView, ledgerLines, ledgerView, r
 import { childMemory, getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
-import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
+import { AUTO_MAX, COMPLEX_QUESTION, TRIAGE_SYSTEM, parseTriage, ruledOut, worthTriaging } from './auto.ts';
+import { ASK_JEV_DESCRIPTION, ASK_JEV_TOOL, AskJevSchema, askJev, headline, kindOf } from './ask-jev.ts';
+import { connectJev, type ConnectJev, type Jev } from './jev.ts';
 import { selectSpecificationTopics } from './checklist.ts';
 import { FACTORY_AGENTS, factoryAgent, factoryCatalogue, type FactoryAgent } from './factory.ts';
 import { cleanupExternalWorkspaces, createExternalWorkspace, discardExternalWorkspace, finalizeExternalWorkspace, type ExternalWorkspace } from './workspace.ts';
@@ -54,6 +56,8 @@ export type JobsOptions = {
   makeRunner?: typeof spawnRunner;
   /** Injected by the tests; the real one asks the cheapest model on the registry. */
   complete?: (system: string, user: string, ctx: ExtensionContext) => Promise<string>;
+  /** Injected by the tests; the real one reads the shared TypeSafe key. */
+  jev?: ConnectJev;
   /** Injected by the tests; the real one lives beside the agent directory. */
   wireRoot?: string;
   /** External factory workspaces. Defaults to ~/.prjct/subagents/workspaces. */
@@ -151,6 +155,19 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     auto: { enabled: autoFromEnv(), inFlight: false },
     /** Set on shutdown: nothing admits a child into a session that is leaving. */
     closed: false,
+    /** Jev, once per process; undefined inside means no key, and everything runs as before. */
+    jev: undefined as Promise<Jev | undefined> | undefined,
+    /** Set once the key lookup has settled, so a turn never waits on it. */
+    jevKnown: undefined as { jev: Jev | undefined } | undefined,
+  };
+
+  /** ask_jev stays out of the prompt entirely when there is no key to answer it. */
+  const applyJev = (): void => {
+    if (!state.jevKnown || state.jevKnown.jev) return;
+    try {
+      const active = pi.getActiveTools();
+      if (active.includes(ASK_JEV_TOOL)) pi.setActiveTools(active.filter(name => name !== ASK_JEV_TOOL));
+    } catch { /* not initialized yet: session_start applies it */ }
   };
 
   /**
@@ -392,6 +409,18 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const englishFields = <T extends Record<string, string | undefined>>(fields: T): Promise<T> =>
     toEnglishFields(fields, translate);
 
+  /** Jev's probability that the prompt is complex, or undefined when Jev is not there to ask. */
+  const complexity = async (prompt: string): Promise<number | undefined> => {
+    const jev = await state.jev;
+    if (!jev) return undefined;
+    try {
+      const answer = (await jev({ task: prompt.slice(0, 8000) }, COMPLEX_QUESTION)).complex;
+      return answer?.type === 'noul' ? answer.noul : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   /**
    * Triage one typed prompt, and launch what it earns.
    *
@@ -402,6 +431,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const triageAndLaunch = async (prompt: string, context: ExtensionContext): Promise<void> => {
     const jobs = state.jobs;
     if (!jobs || state.closed) return;
+    // Most prompts end here, on one cheap answer, without a model writing a plan.
+    if (ruledOut(await complexity(prompt)) || state.closed) return;
     const plan = parseTriage(await complete(TRIAGE_SYSTEM, `Working directory: ${context.cwd}\n\nTask:\n${prompt}`, context));
     // The triage call outlives nothing: a shutdown that landed while it ran
     // must not find a fresh child beside a session that is gone.
@@ -620,7 +651,11 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   // Another extension may restore a tool list captured while delegation was on
   // (plan mode does). Re-check before every turn, and refuse the call anyway.
-  pi.on('before_agent_start', (_event: any, context: ExtensionContext) => { applyDelegation(context); return undefined; });
+  pi.on('before_agent_start', (_event: any, context: ExtensionContext) => {
+    applyDelegation(context);
+    applyJev();
+    return undefined;
+  });
   pi.on('tool_call', (event: any) => {
     if (event?.toolName !== DELEGATE_TOOL_NAME || state.delegation.enabled) return undefined;
     return { block: true, reason: DELEGATION_OFF };
@@ -747,6 +782,35 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
 
+  pi.registerTool({
+    name: ASK_JEV_TOOL,
+    label: 'Ask Jev',
+    description: ASK_JEV_DESCRIPTION,
+    parameters: AskJevSchema,
+    async execute(_toolCallId: string, input: any, signal?: AbortSignal) {
+      const jev = await state.jev;
+      if (!jev) throw new Error('No TypeSafe key is set, so Jev cannot answer. Read the files instead.');
+      const result = await askJev(jev, input, ctx().cwd, signal);
+      if ('error' in result && !('results' in result)) throw new Error(String(result.error));
+      return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], details: { input, result } };
+    },
+    renderShell: 'self',
+    renderCall(args: any, theme: any, context: any) {
+      if (context?.isPartial === false) return new Container();
+      return row(theme, { symbol: SYMBOL.active, tone: 'accent', verb: 'JEV', target: plain(String(args?.question ?? '')), meta: 'asking…' });
+    },
+    renderResult(result: any, _options: unknown, theme: any) {
+      const details = result?.details as { input?: any; result?: Record<string, unknown> } | undefined;
+      const paths = details?.input?.paths?.length ?? 0;
+      const target = `${plain(String(details?.input?.question ?? ''))}${paths ? ` · ${paths} file${paths === 1 ? '' : 's'}` : ''}`;
+      if (!details?.result) {
+        const first = result?.content?.[0];
+        return row(theme, { symbol: SYMBOL.error, tone: 'error', verb: 'JEV', target, meta: first?.type === 'text' ? plain(first.text).slice(0, 120) : 'failed' });
+      }
+      return row(theme, { symbol: SYMBOL.ok, tone: 'success', verb: 'JEV', target, meta: `${kindOf(details.input).replace('_', '/')} · ${headline(details.result)}` });
+    },
+  } as Parameters<ExtensionAPI['registerTool']>[0]);
+
   /**
    * Auto-delegation never delays the prompt it watches: the handler returns
    * immediately and the triage runs beside the turn it started.
@@ -801,6 +865,13 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     state.choices = choices(context);
     registerDelegate(choiceHint(state.choices));
     applyDelegation(context);
+    // The keyring is read once, beside the session start, never in front of it.
+    state.jev ??= (options.jev ?? connectJev)().then(jev => {
+      state.jevKnown = { jev };
+      applyJev();
+      return jev;
+    });
+    applyJev();
     const jobs = build(context.sessionManager.getSessionId());
     state.jobs = jobs;
     // Only this session's own ledger, never a fork's copy of one: a fork would

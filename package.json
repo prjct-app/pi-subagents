@@ -78,9 +78,14 @@
     ],
     "copy": [
       "factory"
+    ],
+    "external": [
+      "@napi-rs/keyring"
     ]
   },
   "dependencies": {
-    "@prjct.app/pi-tui-kit": "file:../pi-tui-kit"
+    "@prjct.app/pi-tui-kit": "file:../pi-tui-kit",
+    "@napi-rs/keyring": "1.3.0",
+    "@typesafe-ai/sdk": "0.6.0"
   }
 }

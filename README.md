@@ -82,12 +82,27 @@ snapshot under `~/.prjct/subagents/workspaces/`; they never receive Bash or arbi
 mutation extensions. The snapshot includes tracked changes and non-ignored untracked
 files. The resulting `changes.patch` must be reviewed and applied separately.
 
-## Three tools
+## Four tools
 
 - **`agent_delegate`**: set `agent` to a base role or factory profile, plus `subject`, `task`, and optional `context`, `model`, `cwd`. `requestedByUser: true` is required for `product-documenter`.
 - **`agent_jobs`**: `action: status | result | cancel | steer | resume`, optional
   `jobId` and `message` (required for steer/resume). `result` returns the full report.
 - **`agent_reply`**: `name`, `answer`; answer a question escalated by a live child.
+- **`ask_jev`**: `question`, plus `paths` and/or `text`; `options` makes it a pick-one,
+  `levels` a score, neither a yes/no. `each: true` asks every path in parallel. Code reads
+  the files and sends them to [Jev](https://typesafe.ai); the model gets the answer and its
+  probability, never the file. `.env`, key files, binaries and directories are not sent.
+
+## Jev
+
+With a TypeSafe key (`TYPESAFE_API_KEY`, or the OS keyring entry pi-qa and pi-memory
+share), two things use Jev. Neither blocks the agent or waits in front of a turn, and
+without a key both behave exactly as they did before:
+
+- **`ask_jev`** is in the prompt only when a key is found.
+- **Auto-delegation** asks Jev whether the prompt is complex before any model writes a plan.
+  Below 0.6 the triage ends there, with no generative call. An error or a timeout
+  falls back to the model triage.
 
 Jobs return immediately; results arrive in the parent session. Delivery failures
 are retried, including while idle, and receipt IDs prevent duplicate delivery on

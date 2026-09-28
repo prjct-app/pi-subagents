@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `ask_jev`: a yes/no, pick-one or score judgement about files or text from Jev, without reading them into context; `each: true` asks every path in parallel. It is in the prompt only when a TypeSafe key is found, and never sends `.env`, key files or binaries.
+- Auto-delegation asks Jev whether a prompt is complex before a model writes a plan; below 0.6 no generative call is made. Without a key, or on any Jev error, the model triage runs as before.
 - Start every subagent admitted by the default 64-job session budget in parallel instead of holding all but two in a queue; return the post-launch state so active entities no longer render as queued.
 - Theme generated subagent names around the whole Matrix saga: the four films, The Animatrix, Enter the Matrix, The Matrix Online, and The Matrix Comics.
 - Replace the conflicting `agent`/`role` delegation selectors with one required `agent` selector that accepts factory profiles and base roles. Legacy calls remain accepted, and rejected calls render as failures instead of `Job unavailable`.

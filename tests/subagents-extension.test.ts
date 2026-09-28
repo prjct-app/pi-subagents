@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installJobs } from '../src/index.ts';
+import type { ConnectJev } from '../src/jev.ts';
 import type { Handle, Runner, RunnerEvent } from '../src/runner.ts';
 import type { Job, Report } from '../src/schema.ts';
 import { isTerminal as isTerminalState } from '../src/schema.ts';
@@ -18,7 +19,7 @@ const good = (over: Partial<Report> = {}): Report => ({
 });
 
 /** The host, as much of it as this extension touches. */
-function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; cwd?: string; workspaceRoot?: string; ledgerWriteMs?: number } = {}) {
+function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; jev?: ConnectJev; cwd?: string; workspaceRoot?: string; ledgerWriteMs?: number } = {}) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const renderers = new Map<string, any>();
@@ -80,7 +81,8 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   }) as any;
   const made: any[] = [];
 
-  installJobs(pi, { makeRunner, tickMs: 50, ledgerWriteMs: options.ledgerWriteMs ?? 0, ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
+  // No test reaches the keyring or the network: Jev is absent unless a test brings one.
+  installJobs(pi, { makeRunner, tickMs: 50, ledgerWriteMs: options.ledgerWriteMs ?? 0, jev: options.jev ?? (async () => undefined), ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
 
   const emit = async (name: string, event: unknown = {}) => {
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
@@ -571,6 +573,52 @@ test('a shutdown mid-triage admits no child into a session that is leaving', asy
   await settleTick(); await settleTick();
   assert.equal(calls.value, 1, 'the triage really was in flight');
   assert.equal(h.runs.size, 0, 'no orphan: the closed flag stopped the admission');
+});
+
+test('Jev answers the triage first: not complex ends it with no model call; no answer keeps the old path', async (t) => {
+  const auto = process.env.PI_AGENTS_AUTO;
+  t.after(() => { if (auto === undefined) delete process.env.PI_AGENTS_AUTO; else process.env.PI_AGENTS_AUTO = auto; });
+  process.env.PI_AGENTS_AUTO = '1';
+  const plan = '{"complex": true, "subtasks": [{"role": "explorer", "subject": "map it", "task": "Read src/."}]}';
+  const prompt = `Rework the store and the runner together. ${'Detail. '.repeat(30)}`;
+  const run = async (answer: () => Promise<number>) => {
+    const calls = { value: 0 };
+    const h = host({
+      complete: async () => { calls.value += 1; return plan; },
+      jev: async () => async () => ({ complex: { type: 'noul', noul: await answer() } }),
+    });
+    await h.emit('session_start', { reason: 'startup' });
+    await h.commands.get('agents').handler('on', h.ctx);
+    await h.emit('input', { text: prompt, source: 'interactive' });
+    const deadline = Date.now() + 2000;
+    while (h.runs.size < 1 && calls.value === 0 && Date.now() < deadline) await settleTick();
+    for (const _ of [1, 2, 3, 4]) await settleTick();
+    return { calls: calls.value, runs: h.runs.size };
+  };
+  assert.deepEqual(await run(async () => 0.2), { calls: 0, runs: 0 }, 'not complex: no plan is written');
+  assert.deepEqual(await run(async () => 0.9), { calls: 1, runs: 1 }, 'complex: the model writes the subtasks');
+  assert.deepEqual(await run(async () => { throw new Error('timeout'); }), { calls: 1, runs: 1 }, 'a failed answer changes nothing');
+});
+
+test('ask_jev leaves the prompt when there is no key, and answers without returning the file when there is', async (t) => {
+  const absent = host();
+  absent.activeTools.names.push('ask_jev');
+  await absent.emit('session_start', { reason: 'startup' });
+  await settleTick();
+  assert.equal(absent.activeTools.names.includes('ask_jev'), false, 'no key, no tool in the prompt');
+  await assert.rejects(() => absent.tools.get('ask_jev').execute('j0', { question: 'q', text: 'x' }), /No TypeSafe key/);
+
+  const dir = await mkdtemp(join(tmpdir(), 'subagents-jev-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'session.ts'), 'export function check(token) { return verify(token); }');
+  const present = host({ cwd: dir, jev: async () => async () => ({ answer: { type: 'noul', noul: 0.97 } }) });
+  present.activeTools.names.push('ask_jev');
+  await present.emit('session_start', { reason: 'startup' });
+  await settleTick();
+  assert.equal(present.activeTools.names.includes('ask_jev'), true);
+  const result = await present.tools.get('ask_jev').execute('j1', { question: 'Does `content` validate tokens?', paths: ['session.ts'] });
+  assert.deepEqual(JSON.parse(result.content[0].text), { answer: 'yes', p_yes: 0.97 });
+  assert.equal(result.content[0].text.includes('verify'), false);
 });
 
 test('failed completion delivery retries while idle without duplicate report entries', async () => {

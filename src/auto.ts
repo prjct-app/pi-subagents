@@ -26,7 +26,31 @@ export function worthTriaging(text: string): boolean {
   return trimmed.length >= MIN_CHARS && !trimmed.startsWith('/');
 }
 
-export const TRIAGE_SYSTEM = `You decide whether a software task is complex enough to be split for parallel expert subagents, and if so, how.
+/**
+ * The yes/no half of the triage, asked of Jev before any model writes a plan.
+ * Most prompts are not complex, and for those this one cheap answer is the
+ * whole triage: no generative call is made. Above the line, the model below
+ * still writes the subtasks, because that part is writing, not deciding.
+ */
+export const COMPLEX_QUESTION = {
+  complex: {
+    type: 'noul' as const,
+    instructions: 'Is `task` complex enough to split across parallel expert subagents that each read a different part of the codebase?',
+    criteria: {
+      true: 'Spans several files, directories or areas that can be investigated independently, and reading them all in one context would cost more than splitting saves.',
+      false: 'A question, a single-file change, a command, an explanation, or anything one lookup or one reader answers.',
+    },
+  },
+};
+/** "When in doubt, not complex": the line sits above even odds. */
+export const COMPLEX_MIN = 0.6;
+
+/** Whether Jev's answer rules the plan out. No answer never rules anything out. */
+export function ruledOut(noul: number | undefined): boolean {
+  return noul !== undefined && noul < COMPLEX_MIN;
+}
+
+export const TRIAGE_SYSTEM =`You decide whether a software task is complex enough to be split for parallel expert subagents, and if so, how.
 
 Answer with JSON and nothing else: {"complex": boolean, "subtasks": [{"role": "explorer" | "reviewer", "subject": "...", "task": "..."}]}
 

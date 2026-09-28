@@ -10,6 +10,7 @@ import { childPrompt } from '../src/context.ts';
 import {
   ASK_PREFIX, DELEGATE_TOOL, REPORT_TOOL, newJobId, type DelegateAnswer, type Job,
 } from '../src/schema.ts';
+import { ASK_JEV_TOOL } from '../src/ask-jev.ts';
 
 const job = (over: Partial<Job> = {}): Job => ({
   id: newJobId(), role: 'reviewer', name: 'Nadia', subject: 'review it',
@@ -158,7 +159,7 @@ test('the child starts with ambient discovery off, and able to read and to repor
     '--no-extensions', '-e', '/owned/guard.ts',
     '--no-skills', '--no-prompt-templates',
     '--no-approve',
-    '--tools', `read,grep,find,ls,${REPORT_TOOL},subagent_model,subagent_ask,subagent_memory`,
+    '--tools', `read,grep,find,ls,${ASK_JEV_TOOL},${REPORT_TOOL},subagent_model,subagent_ask,subagent_memory`,
   ]);
   // `--tools` is an allowlist over extension tools too, so a report tool left
   // out of it is a child that works perfectly and then fails for saying nothing.

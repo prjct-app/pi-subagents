@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { DEFAULT_LIMITS, type Limits } from './manager.ts';
-import { READ_ONLY_TOOLS, type Role } from './schema.ts';
+import { READ_ONLY_ABILITIES, type Role } from './schema.ts';
 
 export type Settings = { runner: 'process' | 'in-process'; retentionDays: number; workspaceRetentionHours: number; artifactPolicy: 'none' | 'requested'; extensionPackages: string[]; limits: Limits };
 export const agentHome = (): string => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');
@@ -40,7 +40,8 @@ export function loadSettings(cwd: string, home = agentHome(), warn: (text: strin
   }, defaultSettings());
 }
 
-const CORE_TOOLS = new Set<string>([...READ_ONLY_TOOLS, 'edit', 'write', 'bash']);
+const READ_ONLY = new Set<string>(READ_ONLY_ABILITIES);
+const CORE_TOOLS = new Set<string>([...READ_ONLY, 'edit', 'write', 'bash']);
 
 /**
  * A child starts with --no-extensions, so a third-party tool it did not load
@@ -50,7 +51,7 @@ const CORE_TOOLS = new Set<string>([...READ_ONLY_TOOLS, 'edit', 'write', 'bash']
 export function roleTools(role: Role, active: readonly string[], allowBash = process.env.PI_SUBAGENTS_ALLOW_BASH === '1', allowExtensionTools = false): string[] {
   const tools = active.filter(name => !name.startsWith('agent_') && !name.startsWith('subagent_'))
     .filter(name => allowExtensionTools || CORE_TOOLS.has(name));
-  if (role !== 'worker') return tools.filter(name => (READ_ONLY_TOOLS as readonly string[]).includes(name));
+  if (role !== 'worker') return tools.filter(name => READ_ONLY.has(name));
   return tools.filter(name => name !== 'bash' || (allowBash && (tools.includes('edit') || tools.includes('write'))));
 }
 

@@ -3,6 +3,7 @@ import { StringEnum } from '@earendil-works/pi-ai';
 import { Type } from 'typebox';
 import { Compile } from 'typebox/compile';
 import { ChangeReplySchema } from '@prjct.app/pi-tui-kit';
+import { ASK_JEV_TOOL } from './ask-jev.ts';
 
 /**
  * Ephemeral subagents: parent-owned jobs that start when a session delegates a
@@ -156,13 +157,20 @@ export const DelegateEnvelopeSchema = Type.Object({
 /** Everything a child may do to the disk: look at it. */
 export const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls'] as const;
 /**
+ * What a read-only role keeps: ways of looking at the disk, and the one
+ * judgement that looks at it for them. ask_jev reads files on the child's
+ * behalf and returns an answer — never a file, never a write — so it sits with
+ * the readers instead of with the extension tools a child does not load.
+ */
+export const READ_ONLY_ABILITIES: readonly string[] = [...READ_ONLY_TOOLS, ASK_JEV_TOOL];
+/**
  * The whole tool list, the guard's own included.
  *
  * `--tools` is a strict allowlist across built-in, extension and custom tools
  * alike, so a child whose report tool is not named here cannot report at all —
  * it would work perfectly and then fail for having said nothing.
  */
-export const CHILD_TOOLS: readonly string[] = [...READ_ONLY_TOOLS, REPORT_TOOL, MODEL_TOOL, ASK_TOOL, MEMORY_TOOL];
+export const CHILD_TOOLS: readonly string[] = [...READ_ONLY_ABILITIES, REPORT_TOOL, MODEL_TOOL, ASK_TOOL, MEMORY_TOOL];
 
 /**
  * Every state a job can be in. There is no state that waits forever: a job

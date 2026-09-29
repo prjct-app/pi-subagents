@@ -43,6 +43,12 @@ const GUARD = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? './child.t
 /** Only while something is open. Nothing here polls an idle session. */
 const TICK_MS = 5_000;
 /**
+ * An unchanged status check waits this long for a job to change before it
+ * answers. Models polled status every ~6s despite being told not to; each
+ * poll was a full request, and one wait replaces several of them.
+ */
+const STATUS_WAIT_MS = 30_000;
+/**
  * Ledger snapshots were written on every commit: five within a second for one
  * delegation, each carrying every report again. Real sessions accumulated 47MB
  * of them in three days, 60% within two seconds of the previous one.
@@ -65,6 +71,8 @@ export type JobsOptions = {
   tickMs?: number;
   /** Coalescing window for ledger snapshots; 0 writes every commit. */
   ledgerWriteMs?: number;
+  /** How long an unchanged status check waits for a change. */
+  statusWaitMs?: number;
 };
 
 /**
@@ -523,6 +531,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         }
         showWidget();
         notify();
+        for (const wake of statusWaiters) wake();
         if (undelivered(ledger).length > 0) queueMicrotask(deliver);
       },
     });
@@ -667,6 +676,25 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const lastStatus = { snapshot: '' };
   const ledgerSnapshot = (ledger: ReturnType<NonNullable<typeof state.jobs>['ledger']>): string =>
     JSON.stringify(ledger.jobs.map(job => [job.id, job.state, Boolean(job.report)]));
+  /** Status checks waiting for the ledger to change; woken on every ledger change. */
+  const statusWaiters = new Set<() => void>();
+  /**
+   * Resolves when the ledger no longer matches `snapshot`, when `ms` pass, or
+   * when the call is aborted. A report that lands meanwhile is steered into
+   * this run, since the session is busy with it.
+   */
+  const changeAfter = (snapshot: string, ms: number, signal?: AbortSignal): Promise<void> => new Promise(resolve => {
+    const done = (): void => { clearTimeout(timer); statusWaiters.delete(check); signal?.removeEventListener('abort', done); resolve(); };
+    const check = (): void => {
+      const jobs = state.jobs;
+      if (!jobs || state.closed || ledgerSnapshot(jobs.ledger()) !== snapshot) done();
+    };
+    // Not unref'd: a tool call is awaiting it, and it is bounded by `ms`.
+    const timer = setTimeout(done, ms);
+    statusWaiters.add(check);
+    signal?.addEventListener('abort', done, { once: true });
+    if (signal?.aborted) done();
+  });
 
   pi.registerTool({
     name: 'agent_jobs',
@@ -677,13 +705,14 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       + 'resolve marks a finished job\'s blockers as handled once you have dealt with them (it then no longer counts as unresolved). '
       + 'purge forgets finished jobs whose reports you already have, freeing the session job budget (a full budget purges them by itself); give jobId to purge one resolved blocker. '
       + 'Never use status to wait: reports arrive in this conversation by themselves and wake the session when it is idle. '
+      + `A status check with nothing new holds for up to ${STATUS_WAIT_MS / 1000}s for a change before it answers; after that, end your turn instead of checking again. `
       + `Messages to a job: ${ENGLISH_RULE}`,
     parameters: Type.Object({
       action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume', 'purge', 'resolve'] as const),
       jobId: Type.Optional(Type.String({ maxLength: 128 })),
       message: Type.Optional(Type.String({ minLength: 1, maxLength: 4000 })),
     }),
-    async execute(_toolCallId: string, input: any) {
+    async execute(_toolCallId: string, input: any, signal?: AbortSignal) {
       const jobs = state.jobs;
       if (!jobs) throw new Error('This session has not delegated anything.');
       if (['result', 'steer', 'resume'].includes(input.action)) {
@@ -724,16 +753,21 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         deliver();
         return { content: [{ type: 'text' as const, text: `${job.name} stopped.` }], details: jobs.ledger() };
       }
-      const ledger = jobs.ledger();
+      const before = ledgerSnapshot(jobs.ledger());
+      const repeated = before === lastStatus.snapshot && jobs.ledger().jobs.some(job => !isTerminal(job.state));
+      const waitMs = options.statusWaitMs ?? STATUS_WAIT_MS;
+      // Nothing new since the last check: hold for a change rather than answer
+      // at once and be asked again a few seconds later.
+      if (repeated) await changeAfter(before, waitMs, signal);
+      const ledger = state.jobs?.ledger() ?? jobs.ledger();
       const open = unresolved(ledger);
       const snapshot = ledgerSnapshot(ledger);
-      const unchanged = snapshot === lastStatus.snapshot && ledger.jobs.some(job => !isTerminal(job.state));
       lastStatus.snapshot = snapshot;
-      if (unchanged) {
+      if (repeated && snapshot === before) {
         return {
           content: [{
             type: 'text' as const,
-            text: `No change since your last check; ${ledger.jobs.filter(job => !isTerminal(job.state)).length} still running. `
+            text: `No change since your last check; ${ledger.jobs.filter(job => !isTerminal(job.state)).length} still running after a ${Math.round(waitMs / 1000)}s wait. `
               + 'Their reports arrive here by themselves and wake this session when it is idle, so do not poll. '
               + 'Continue your own work, or end your turn if nothing else is left.',
           }],

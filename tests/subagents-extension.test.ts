@@ -20,7 +20,7 @@ const good = (over: Partial<Report> = {}): Report => ({
 });
 
 /** The host, as much of it as this extension touches. */
-function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; jev?: ConnectJev; cwd?: string; workspaceRoot?: string; ledgerWriteMs?: number } = {}) {
+function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; jev?: ConnectJev; cwd?: string; workspaceRoot?: string; ledgerWriteMs?: number; statusWaitMs?: number } = {}) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const renderers = new Map<string, any>();
@@ -83,7 +83,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   const made: any[] = [];
 
   // No test reaches the keyring or the network: Jev is absent unless a test brings one.
-  installJobs(pi, { makeRunner, tickMs: 50, ledgerWriteMs: options.ledgerWriteMs ?? 0, jev: options.jev ?? (async () => undefined), ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
+  installJobs(pi, { makeRunner, tickMs: 50, ledgerWriteMs: options.ledgerWriteMs ?? 0, statusWaitMs: options.statusWaitMs ?? 50, jev: options.jev ?? (async () => undefined), ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
 
   const emit = async (name: string, event: unknown = {}) => {
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
@@ -386,6 +386,33 @@ test('an unchanged status check answers briefly instead of re-listing the ledger
   await h.tools.get('agent_jobs').execute('stop', { action: 'cancel', jobId: job.id });
   const changed = await h.tools.get('agent_jobs').execute('poll_3', { action: 'status' });
   assert.doesNotMatch(changed.content[0].text, /No change/, 'a changed ledger is listed again');
+});
+
+test('a repeated status check holds for a change and answers as soon as one lands', async () => {
+  const h = host({ statusWaitMs: 5_000 });
+  await h.emit('session_start', { reason: 'resume' });
+  const job = (await h.delegate()).details as Job;
+  await h.tools.get('agent_jobs').execute('poll_1', { action: 'status' });
+  const started = Date.now();
+  const waiting = h.tools.get('agent_jobs').execute('poll_2', { action: 'status' });
+  setTimeout(() => h.of(job).emit({ type: 'settled', report: good() }), 100);
+  const answer = await waiting;
+  assert.ok(Date.now() - started < 4_000, 'answered when the job changed, not at the end of the wait');
+  assert.doesNotMatch(answer.content[0].text, /No change/);
+  assert.match(answer.content[0].text, /review the importer/);
+});
+
+test('an aborted status wait answers at once', async () => {
+  const h = host({ statusWaitMs: 5_000 });
+  await h.emit('session_start', { reason: 'resume' });
+  await h.delegate();
+  await h.tools.get('agent_jobs').execute('poll_1', { action: 'status' });
+  const abort = new AbortController();
+  const started = Date.now();
+  setTimeout(() => abort.abort(), 50);
+  const answer = await h.tools.get('agent_jobs').execute('poll_2', { action: 'status' }, abort.signal);
+  assert.ok(Date.now() - started < 2_000);
+  assert.match(answer.content[0].text, /No change since your last check/);
 });
 
 test('status shows the tree, and cancelling one stops its child', async () => {

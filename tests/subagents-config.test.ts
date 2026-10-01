@@ -15,11 +15,13 @@ test('layered settings validate every field and preserve lower-layer values', as
   const root = await fixture(t); const home = join(root, 'home'); const project = join(root, 'project');
   await mkdir(home); await mkdir(join(project, '.pi'), { recursive: true });
   await writeFile(join(home, 'prjct-subagents.json'), JSON.stringify({ limits: { concurrency: 3, jobs: 80 }, retentionDays: 14, workspaceRetentionHours: 48, artifactPolicy: 'none', runner: 'in-process' }));
-  await writeFile(join(project, '.pi', 'prjct-subagents.json'), JSON.stringify({ limits: { jobs: 120, concurrency: -1, nonsense: 2 }, retentionDays: 0, runner: 'process', extensionPackages: ['test', 'test'] }));
+  await writeFile(join(project, '.pi', 'prjct-subagents.json'), JSON.stringify({ limits: { jobs: 120, concurrency: -1, nonsense: 2 }, retentionDays: 0, runner: 'process', routeModels: false, extensionPackages: ['test', 'test'] }));
   const warnings: string[] = []; const settings = loadSettings(project, home, text => warnings.push(text));
   assert.equal(settings.limits.concurrency, 3); assert.equal(settings.limits.jobs, 120); assert.equal(settings.retentionDays, 14);
   assert.equal(settings.workspaceRetentionHours, 48); assert.equal(settings.artifactPolicy, 'none');
   assert.equal(settings.runner, 'process'); assert.deepEqual(settings.extensionPackages, ['test']); assert.equal(warnings.length, 3);
+  assert.equal(settings.routeModels, false, 'routing is a setting, so a session can refuse it');
+  assert.equal(defaultSettings().routeModels, true, 'delegations without a model earn one by default');
   await writeFile(join(project, '.pi', 'prjct-subagents.json'), '{broken');
   assert.equal(loadSettings(project, home, () => {}).runner, 'in-process');
   assert.deepEqual(loadSettings('/nonexistent', '/nonexistent', () => {}), defaultSettings());

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Container, Key, Text } from '@earendil-works/pi-tui';
-import { ENGLISH_RULE, SYMBOL, brand, completer, row, sessionComplete, setMode, toEnglishFields, toEnglishInstructions } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, SYMBOL, brand, completer, row, sessionComplete, setMode, toEnglishFields, toEnglishInstructions, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
@@ -107,6 +107,7 @@ export type JobsHandle = {
 };
 
 export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHandle {
+  repairToolArgs(pi, { agent_jobs: { aliases: { message: ['text', 'body', 'note'] } }, agent_reply: { truncate: true } });
   // pi-team registers a provider through the registry when a team task can be
   // open; an explicit option still wins, which is how tests stay hermetic.
   const activeRoot = options.activeRoot ?? getActiveRoot;
@@ -254,21 +255,34 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const externalWorkspace = async (profile: FactoryAgent | undefined, source: string): Promise<ExternalWorkspace | undefined> =>
     profile?.workspace === 'isolated' ? createExternalWorkspace(source, options.workspaceRoot) : undefined;
 
-  /** A model a job may run on: the one asked for, or this session's own. */
+  /** The model asked for, when this session has it. */
+  const choiceFor = (wanted?: string) => {
+    const asked = wanted?.trim();
+    return asked ? findChoice(state.choices, asked) ?? state.choices.find(choice => choice.modelId === asked) : undefined;
+  };
+
+  /**
+   * A model a job may run on: the one asked for, or this session's own. A name
+   * this session does not have (a stale instruction, a model recalled from
+   * memory) runs on the session's own model instead of failing the delegation.
+   */
   const resolve = (wanted?: string): { provider: string; modelId: string } | { refused: string } => {
     const current = (state.ctx as any)?.model;
-    if (!wanted?.trim()) {
-      if (!current?.provider || !current?.id) return { refused: 'This session has no model to give a job.' };
-      return { provider: current.provider, modelId: current.id };
-    }
-    const asked = wanted.trim();
-    const exact = findChoice(state.choices, asked)
-      ?? state.choices.find(choice => choice.modelId === asked);
-    if (!exact) {
-      return { refused: `${asked} is not a model this session has. Available: ${state.choices.map(choice => choice.key).join(', ')}.` };
-    }
-    return { provider: exact.provider, modelId: exact.modelId };
+    const exact = choiceFor(wanted);
+    if (exact) return { provider: exact.provider, modelId: exact.modelId };
+    const own = current?.provider && current?.id ? { provider: current.provider as string, modelId: current.id as string } : undefined;
+    if (!wanted?.trim()) return own ?? { refused: 'This session has no model to give a job.' };
+    // A scoped session scopes its children too: the stand-in comes from the list.
+    const inList = own && state.choices.some(choice => choice.provider === own.provider && choice.modelId === own.modelId);
+    const standIn = inList ? own : state.choices[0];
+    return standIn ? { provider: standIn.provider, modelId: standIn.modelId } : { refused: 'This session has no model to give a job.' };
   };
+
+  /** Said once in the delegation result when the asked-for model was not available. */
+  const substituted = (wanted: unknown, used: { provider: string; modelId: string }): string =>
+    typeof wanted === 'string' && wanted.trim() && !choiceFor(wanted)
+      ? `${wanted.trim()} is not enabled in this session, so it runs on ${modelKey(used.provider, used.modelId)}. `
+      : '';
 
   /** Deliver what finished, once, at a point the session can take a message. */
   const deliver = (): void => {
@@ -585,9 +599,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     pi.registerTool({
       name: 'agent_delegate',
       label: 'Delegate a job',
-      description: 'Start one separable job. Set agent to either a package-owned factory profile or a base role. Factory implementers and documenters '
-        + 'write only in external snapshots under ~/.prjct/subagents; documentation requires an explicit user request. Factory agents never inherit Bash or third-party mutation tools. '
-        + 'Base explorer and reviewer roles are read-only. A legacy worker may inherit active write tools and opt-in unrestricted Bash. The job reports evidence and ends; do not wait for it. '
+      description: 'Start one separable job on a factory profile or a base role (agent). Factory implementers and documenters write only in external snapshots; '
+        + 'documentation needs an explicit user request. Explorer and reviewer are read-only. The job reports evidence and ends; do not wait for it. '
         + `${ENGLISH_RULE} Factory agents:\n${factoryCatalogue()}\n${hint}`,
       parameters: Type.Object({
         agent: StringEnum(DELEGATE_AGENTS, {
@@ -639,7 +652,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         return {
           content: [{
             type: 'text' as const,
-            text: `${job.name} (${job.agent ?? job.role}) is on "${job.subject}", using ${modelKey(job.provider, job.modelId)}, `
+            text: `${substituted(input.model, job)}${job.name} (${job.agent ?? job.role}) is on "${job.subject}", using ${modelKey(job.provider, job.modelId)}, `
               + `${job.workspace ? `working in external snapshot ${job.cwd}; proposed changes will be written to ${job.patchFile}` : `reading ${job.cwd}`}. `
               + 'Its report arrives here when it ends. Carry on; do not wait for it, and do not ask again for the same work.',
           }],
@@ -699,14 +712,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   pi.registerTool({
     name: 'agent_jobs',
     label: 'Delegated jobs',
-    description: 'Review the subagents this session started, or stop one. A job that came back '
-      + 'blocked is unresolved work you own: this is where to see what is still open before calling '
-      + 'anything finished. Use result for full evidence, steer with a message to guide a live job, or resume with a message to continue a retained conversation. '
-      + 'resolve marks a finished job\'s blockers as handled once you have dealt with them (it then no longer counts as unresolved). '
-      + 'purge forgets finished jobs whose reports you already have, freeing the session job budget (a full budget purges them by itself); give jobId to purge one resolved blocker. '
-      + 'Never use status to wait: reports arrive in this conversation by themselves and wake the session when it is idle. '
-      + `A status check with nothing new holds for up to ${STATUS_WAIT_MS / 1000}s for a change before it answers; after that, end your turn instead of checking again. `
-      + `Messages to a job: ${ENGLISH_RULE}`,
+    description: 'The subagents this session started. A job that came back blocked is open work you own. '
+      + 'result: full evidence. steer: guide a live job. resume: continue a retained one. resolve: mark its blockers handled. '
+      + 'purge: forget finished jobs (jobId for one). Reports arrive by themselves: never poll status; '
+      + `one with nothing new waits up to ${STATUS_WAIT_MS / 1000}s, then end your turn. Messages: plain, simple English.`,
     parameters: Type.Object({
       action: StringEnum(['status', 'cancel', 'result', 'steer', 'resume', 'purge', 'resolve'] as const),
       jobId: Type.Optional(Type.String({ maxLength: 128 })),

@@ -11,7 +11,7 @@ import {
 import { ASK_JEV_DESCRIPTION, ASK_JEV_TOOL, AskJevSchema, runAskJev } from './ask-jev.ts';
 import { connectJev, type ConnectJev, type Jev } from './jev.ts';
 import { post, recent } from './wire.ts';
-import { ENGLISH_RULE } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, repairToolArgs } from '@prjct.app/pi-tui-kit';
 
 /**
  * The only extension a child loads.
@@ -46,6 +46,7 @@ export function installGuard(
   /** How the child reaches Jev. Injected so a test never touches a keyring. */
   connect: ConnectJev = connectJev,
 ): boolean {
+  repairToolArgs(pi, { subagent_report: { truncate: true }, subagent_send: { truncate: true }, subagent_ask: { truncate: true } });
   if (env.PI_SUBAGENTS_CHILD !== '1') return false;
   const askParent = (payload: string, ctx: any): Promise<string | undefined> => request ? request(payload) : ctx?.ui?.input?.(`${ASK_PREFIX}${payload}`, undefined, { timeout: ASK_MS });
   const mayDelegate = env.PI_SUBAGENTS_CAN_DELEGATE === '1';

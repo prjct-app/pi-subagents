@@ -278,16 +278,17 @@ test('the model is this session’s unless one from its own list is asked for', 
   const bare = await h.delegate({ model: 'gpt-5.4-mini' }, 'call_bare');
   assert.equal(bare.details.provider, 'openai-codex', 'named without its provider, if that is unambiguous');
 
-  await assert.rejects(() => h.delegate({ model: 'anthropic/claude-3-opus' }, 'call_bad'),
-    /is not a model this session has. Available: openai-codex\/gpt-5\.4-mini, anthropic\/claude-opus-4-5/,
-    'and anything else is refused with the list, never quietly swapped');
+  const stale = await h.delegate({ model: 'anthropic/claude-3-opus' }, 'call_stale');
+  assert.match(String(stale.content[0].text), /^anthropic\/claude-3-opus is not enabled in this session, so it runs on /,
+    'a name it does not have runs on this session\'s model, and the result says so: never quietly, never a failed delegation');
 });
 
 test('a scoped session offers its children only what it was scoped to', async () => {
   const h = host({ scoped: [{ provider: 'openai-codex', id: 'gpt-5.4-mini', cost: { input: 0.25, output: 2 } }] });
   await h.emit('session_start', { reason: 'resume' });
-  await assert.rejects(() => h.delegate({ model: 'anthropic/claude-opus-4-5' }),
-    /Available: openai-codex\/gpt-5\.4-mini\.$/);
+  const job = await h.delegate({ model: 'anthropic/claude-opus-4-5' });
+  assert.equal(`${job.details.provider}/${job.details.modelId}`, 'openai-codex/gpt-5.4-mini', 'the stand-in comes from the scoped list');
+  assert.match(String(job.content[0].text), /is not enabled in this session, so it runs on openai-codex\/gpt-5\.4-mini/);
 });
 
 test('a finished job reaches the model once, as evidence and not as a verdict', async () => {

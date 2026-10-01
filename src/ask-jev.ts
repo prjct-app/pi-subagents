@@ -20,20 +20,17 @@ const PARALLEL = 16;
 const OTHER = 'other';
 
 export const AskJevSchema = Type.Object({
-  question: Type.String({ minLength: 1, maxLength: 2000, description: 'About `content` (the files) or `text`, e.g. "Does `content` validate auth tokens?"' }),
-  options: Type.Optional(Type.Record(Type.String({ maxLength: 64 }), Type.String({ maxLength: 400 }), { description: 'Pick one: label to when it applies. "other" is added if missing.' })),
-  levels: Type.Optional(Type.Array(Type.String({ maxLength: 400 }), { minItems: 2, maxItems: 10, description: 'Score: situations ordered low to high.' })),
+  question: Type.String({ minLength: 1, maxLength: 2000, description: 'About `content` (the files) or `text`.' }),
+  options: Type.Optional(Type.Record(Type.String({ maxLength: 64 }), Type.String({ maxLength: 400 }), { description: 'label: when it applies.' })),
+  levels: Type.Optional(Type.Array(Type.String({ maxLength: 400 }), { minItems: 2, maxItems: 10, description: 'Low to high.' })),
   paths: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { maxItems: MAX_PATHS })),
-  each: Type.Optional(Type.Boolean({ description: 'Ask about each path separately, in parallel.' })),
+  each: Type.Optional(Type.Boolean({ description: 'One question per path.' })),
   text: Type.Optional(Type.String({ maxLength: 20_000 })),
 });
 export type AskJevInput = Static<typeof AskJevSchema>;
 
-export const ASK_JEV_DESCRIPTION = 'Ask a fast judgement model a yes/no question (default), a pick-one (options) or a score (levels) '
-  + 'about files or text, without reading them into your context: code reads `paths` and sends them as `content`, you get '
-  + 'the answer and its probability, never the file. Use it to learn something about code (does this validate tokens, which '
-  + 'of these files matters); read the file when you need the code itself. each=true asks every path in parallel. '
-  + 'Exact lookups belong to grep.';
+export const ASK_JEV_DESCRIPTION = 'Ask a fast judge about files or text without reading them: yes/no (default), pick one (options) '
+  + 'or a score (levels). `paths` go as `content`; you get the answer and its probability, never the file. Read the file when you need the code; grep for exact lookups.';
 
 type Kind = 'yes_no' | 'choice' | 'score';
 export type Skipped = { path: string; reason: string };

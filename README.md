@@ -1,5 +1,7 @@
 # pi-subagents
 
+[![pi-subagents — for PI Agent](https://raw.githubusercontent.com/prjct-app/pi-subagents/main/docs/cover.png)](https://pi.dev)
+
 Focused delegation for Pi, with a live two-pane terminal workspace, evidence-based
 reports and explicit continuation. No external service, scheduler or team setup.
 
@@ -7,7 +9,9 @@ reports and explicit continuation. No external service, scheduler or team setup.
 pi install npm:@prjct.app/pi-subagents
 ```
 
-Requires Pi **0.85.1–0.85.x** and Node **22.19+**. The default runner launches a
+Tested with Pi **0.85.1–0.85.x**; requires Node **22.19+**.
+Host libraries use wildcard peers as required by Pi packaging. Compatibility
+with other Pi releases has not been verified. The default runner launches a
 child Pi process for each active job; a native in-process runner is opt-in.
 
 ## Turn subagents on and off

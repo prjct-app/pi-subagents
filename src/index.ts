@@ -407,7 +407,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   };
 
   /**
-   * The agents mode on the shared mode line (p-ui) while delegation is on,
+   * The agents mode on the shared mode line (pi-ui) while delegation is on,
    * nothing while it is off. It reads the same ledger the panel draws, so the
    * two never disagree; the 5s tick that runs for live jobs keeps it moving.
    */

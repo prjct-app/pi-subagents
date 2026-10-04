@@ -5,11 +5,11 @@ import { createRequire } from 'node:module';
 import { DEFAULT_LIMITS, type Limits } from './manager.ts';
 import { READ_ONLY_ABILITIES, type Role } from './schema.ts';
 
-export type Settings = { runner: 'process' | 'in-process'; retentionDays: number; workspaceRetentionHours: number; artifactPolicy: 'none' | 'requested'; extensionPackages: string[]; routeModels: boolean; limits: Limits };
+export type Settings = { runner: 'process' | 'in-process'; retentionDays: number; workspaceRetentionHours: number; artifactPolicy: 'none' | 'requested'; extensionPackages: string[]; limits: Limits };
 export const agentHome = (): string => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');
 /** Package-owned state stays outside both Pi's resource tree and client repositories. */
 export const prjctHome = (): string => process.env.PRJCT_HOME ?? join(homedir(), '.prjct');
-export const defaultSettings = (): Settings => ({ runner: 'process', retentionDays: 7, workspaceRetentionHours: 24, artifactPolicy: 'requested', extensionPackages: [], routeModels: true, limits: { ...DEFAULT_LIMITS } });
+export const defaultSettings = (): Settings => ({ runner: 'process', retentionDays: 7, workspaceRetentionHours: 24, artifactPolicy: 'requested', extensionPackages: [], limits: { ...DEFAULT_LIMITS } });
 
 /** Invalid fields do not erase a valid value from the lower configuration layer. */
 export function loadSettings(cwd: string, home = agentHome(), warn: (text: string) => void = console.warn): Settings {
@@ -19,12 +19,13 @@ export function loadSettings(cwd: string, home = agentHome(), warn: (text: strin
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Expected an object');
       const next = { ...settings, limits: { ...settings.limits } };
       for (const [key, value] of Object.entries(raw)) {
+        // Retired 2026-10-03 with Jev's model routing; old files still load quietly.
+        if (key === 'routeModels') continue;
         if (key === 'runner' && (value === 'process' || value === 'in-process')) next.runner = value;
         else if (key === 'retentionDays' && Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 365) next.retentionDays = Number(value);
         else if (key === 'workspaceRetentionHours' && Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 720) next.workspaceRetentionHours = Number(value);
         else if (key === 'artifactPolicy' && (value === 'none' || value === 'requested')) next.artifactPolicy = value;
         else if (key === 'extensionPackages' && Array.isArray(value) && value.every(v => typeof v === 'string' && v.trim())) next.extensionPackages = [...new Set(value)];
-        else if (key === 'routeModels' && typeof value === 'boolean') next.routeModels = value;
         else if (key === 'limits' && value && typeof value === 'object' && !Array.isArray(value)) {
           const maxima: Limits = { concurrency: 256, jobs: 256, depth: 8, descendants: 64, taskBytes: 48 * 1024, timeoutMs: 24 * 60 * 60_000 };
           for (const [name, number] of Object.entries(value)) {

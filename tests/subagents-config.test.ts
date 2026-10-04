@@ -20,8 +20,8 @@ test('layered settings validate every field and preserve lower-layer values', as
   assert.equal(settings.limits.concurrency, 3); assert.equal(settings.limits.jobs, 120); assert.equal(settings.retentionDays, 14);
   assert.equal(settings.workspaceRetentionHours, 48); assert.equal(settings.artifactPolicy, 'none');
   assert.equal(settings.runner, 'process'); assert.deepEqual(settings.extensionPackages, ['test']); assert.equal(warnings.length, 3);
-  assert.equal(settings.routeModels, false, 'routing is a setting, so a session can refuse it');
-  assert.equal(defaultSettings().routeModels, true, 'delegations without a model earn one by default');
+  assert.equal('routeModels' in settings, false, 'model routing is gone; an old routeModels key loads without a warning');
+  assert.equal('routeModels' in defaultSettings(), false);
   await writeFile(join(project, '.pi', 'prjct-subagents.json'), '{broken');
   assert.equal(loadSettings(project, home, () => {}).runner, 'in-process');
   assert.deepEqual(loadSettings('/nonexistent', '/nonexistent', () => {}), defaultSettings());

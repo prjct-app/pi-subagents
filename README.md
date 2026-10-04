@@ -108,6 +108,8 @@ without a key both behave exactly as they did before:
   Below 0.6 the triage ends there, with no generative call. An error or a timeout
   falls back to the model triage.
 
+Jev never picks a model. A job with no model named runs on the session's own model.
+
 Jobs return immediately; results arrive in the parent session. Delivery failures
 are retried, including while idle, and receipt IDs prevent duplicate delivery on
 normal session restoration. Pi does not provide transactional send-and-ack, so a

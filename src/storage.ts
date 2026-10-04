@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { prjctHome } from './config.ts';
 import { isTerminal, type Job } from './schema.ts';
@@ -12,13 +12,6 @@ export const storageRoot = (home = prjctHome()): string => join(home, 'subagents
  * its thresholds are tuned from real delegations. Beside the state tree, not
  * in it — nothing here is a job manifest.
  */
-export const routerLog = (home = prjctHome()): string => join(home, 'subagents', 'router.jsonl');
-
-export async function appendRouter(entry: Record<string, unknown>, home = prjctHome()): Promise<void> {
-  const file = routerLog(home);
-  await mkdir(dirname(file), { recursive: true, mode: 0o700 }).catch(() => undefined);
-  await appendFile(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
-}
 export const workspaceRoot = (home = prjctHome()): string => join(home, 'subagents', 'workspaces');
 export const artifactRoot = (home = prjctHome()): string => join(home, 'subagents', 'artifacts');
 const owner = 'prjct-subagents-v2';

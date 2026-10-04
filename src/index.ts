@@ -1,6 +1,5 @@
 import { defaultSettings, loadSettings, roleTools, extensionPaths, agentHome } from './config.ts';
-import { cleanupStorage, storageRoot, sessionRoot, prepareSession, retainSettlement, resumable, appendRouter } from './storage.ts';
-import { routeFor, type Routing } from './route.ts';
+import { cleanupStorage, storageRoot, sessionRoot, prepareSession, retainSettlement, resumable } from './storage.ts';
 import { inProcessRunner } from './in-process.ts';
 import type { Activity } from './activity.ts';
 import { createHash } from 'node:crypto';
@@ -117,8 +116,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const inFlight = new Map<string, number>();
   const recorded = new Set<string>();
   const retained = new Set<string>();
-  /** What the router decided for a job, until its outcome is logged beside it. */
-  const routes = new Map<string, Routing>();
   /**
    * A job whose full record, report included, was already appended as an
    * `agent-job` entry keeps only a reference in later snapshots; restore puts
@@ -287,27 +284,11 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       ? `${wanted.trim()} is not enabled in this session, so it runs on ${modelKey(used.provider, used.modelId)}. `
       : '';
 
-  /**
-   * The model a job runs on when its caller named none: Jev rates the task and
-   * picks from this session's models, cheapest first. Delegations only — the
-   * session itself keeps its model, since switching mid-session breaks the
-   * prompt cache. Anything Jev cannot answer runs on the session's own model.
+  /*
+   * A job with no model named runs on the session's own model. Jev used to rate
+   * the task and pick the cheapest session model for "reading"; 11 of 11 such
+   * jobs failed on MiniMax-M3 (2026-10-01 to 10-03), so routing is gone.
    */
-  const routeJob = async (fields: { subject: string; task: string }): Promise<Routing> =>
-    state.settings.routeModels ? routeFor(fields, state.choices, await state.jev) : { basis: 'session' };
-
-  /** What the router decided for one job, logged with the outcome it earns. */
-  const noteRoute = (job: Job, decision: Routing, source: string, requested?: unknown): void => {
-    routes.set(job.id, decision);
-    void appendRouter({
-      type: 'decision', at: new Date().toISOString(), jobId: job.id, source,
-      agent: job.agent ?? job.role, subject: job.subject,
-      level: decision.level, confidence: decision.confidence, basis: decision.basis,
-      model: modelKey(job.provider, job.modelId),
-      requested: typeof requested === 'string' && requested.trim() ? requested.trim() : undefined,
-      choices: state.choices.map(choice => modelKey(choice.provider, choice.modelId)),
-    }).catch(() => undefined);
-  };
 
   /** Deliver what finished, once, at a point the session can take a message. */
   const deliver = (): void => {
@@ -375,8 +356,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     try {
       const choice = resolveProfile(ask.agent, ask.role);
       if (choice.profile?.explicitOnly) return { ok: false, text: `${choice.profile.name} requires an explicit request from the user.` };
-      const routing = ask.model ? undefined : await routeJob({ subject: ask.subject, task: ask.task });
-      const model = resolve(ask.model ?? routing?.wanted);
+      const model = resolve(ask.model);
       if ('refused' in model) return { ok: false, text: model.refused };
       const workspace = await externalWorkspace(choice.profile, parent.cwd);
       const asked = await englishFields({ subject: ask.subject, task: ask.task, context: ask.context });
@@ -396,7 +376,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         if (workspace) await discardExternalWorkspace(workspace);
         if (!decision.ok) return { ok: false, text: decision.reason };
       }
-      if (routing && !decision.repeated) noteRoute(decision.job, routing, 'child');
       startTicking();
       return {
         ok: true,
@@ -488,9 +467,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     if (!plan.complex || state.closed) return;
     const launched: Job[] = [];
     for (const subtask of plan.subtasks.slice(0, AUTO_MAX)) {
-      // The model the subtask earns; the child chooses from there.
-      const routing = await routeJob({ subject: subtask.subject, task: subtask.task });
-      const model = resolve(routing.wanted);
+      const model = resolve(undefined);
       if ('refused' in model) break;
       const key = `auto:${createHash('sha256').update(`${prompt}:${subtask.subject}`).digest('hex').slice(0, 16)}`;
       const rootId = activeRoot();
@@ -500,10 +477,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         ...model, cwd: context.cwd, depth: 0, tools: inheritedTools(subtask.role), runner: state.settings.runner, key,
         ...(rootId ? { rootId } : {}),
       });
-      if (decision.ok && !decision.repeated) {
-        launched.push(decision.job);
-        noteRoute(decision.job, routing, 'auto');
-      }
+      if (decision.ok && !decision.repeated) launched.push(decision.job);
     }
     if (launched.length === 0) return;
     startTicking();
@@ -569,15 +543,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       onActivity: notify,
       onChange: ledger => {
         if (live(ledger).length > 0 || undelivered(ledger).length > 0) startTicking();
-        for (const [jobId, decision] of [...routes]) {
-          const job = ledger.jobs.find(item => item.id === jobId);
-          if (!job || !isTerminal(job.state)) continue;
-          routes.delete(jobId);
-          void appendRouter({
-            type: 'outcome', at: new Date().toISOString(), jobId, state: job.state,
-            level: decision.level, basis: decision.basis, model: modelKey(job.provider, job.modelId),
-          }).catch(() => undefined);
-        }
         for (const job of (options.makeRunner ? [] : ledger.jobs).filter(job => isTerminal(job.state) && !retained.has(job.id))) {
           retained.add(job.id);
           const workspace = job.patchFile ? finalizeExternalWorkspace({ cwd: job.cwd, patchFile: job.patchFile }) : Promise.resolve('');
@@ -672,10 +637,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         // A job born inside a team thread is filed under it when a host that
         // knows about teams registered a provider; without one it stands alone.
         const rootId = activeRoot();
-        // With no model named, the task earns one: Jev rates it and picks from
-        // this session's models, cheapest first, falling back to the session's own.
-        const routing = input.model ? undefined : await routeJob({ subject: given.subject, task: given.task });
-        const model = resolve(input.model ?? routing?.wanted);
+        // With no model named, the job runs on the session's own model.
+        const model = resolve(input.model);
         if ('refused' in model) throw new Error(model.refused);
         const decision = await jobs.delegate({
           role: choice.role, ...(choice.profile ? { agent: choice.profile.name } : {}),
@@ -690,7 +653,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
           if (workspace) await discardExternalWorkspace(workspace);
           if (!decision.ok) throw new Error(decision.reason);
         }
-        if (routing && !decision.repeated) noteRoute(decision.job, routing, 'delegate', input.model);
         startTicking();
         const job = decision.job;
         return {

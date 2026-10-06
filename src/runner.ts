@@ -6,6 +6,7 @@ import { childPrompt, neutralCatalogue, type ModelChoice } from './context.ts';
 import { factoryAgent } from './factory.ts';
 import { read as readWire } from './wire.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
+import { childBashAllowed } from './config.ts';
 import {
   READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk,
@@ -179,9 +180,9 @@ type Pending = Map<number, (value: Record<string, unknown>) => void>;
  * inheriting the parent's tool list. A read-only child cannot use it to become
  * a writer, even when the operator enabled Bash for writable children.
  */
+/** The role filter already ran at admission; this only honours the operator's bash switch. */
 export function selectChildTools(active: readonly string[], allowBash: boolean): string[] {
-  const writer = active.includes('edit') || active.includes('write');
-  return active.filter(name => name !== 'bash' || (allowBash && writer));
+  return active.filter(name => name !== 'bash' || allowBash);
 }
 
 /** A lookup never holds a child up for long, and a failed one is an empty memory. */
@@ -252,7 +253,7 @@ export function spawnRunner(options: {
      * tools ride along; a test can still widen the whole set via options.
      */
     const inherited = options.tools ?? job.tools ?? READ_ONLY_TOOLS;
-    const permitted = selectChildTools(inherited, process.env.PI_SUBAGENTS_ALLOW_BASH === '1');
+    const permitted = selectChildTools(inherited, childBashAllowed());
     const wired = options.wireRoot !== undefined && job.wire !== undefined;
     const tools = [...new Set([...permitted, REPORT_TOOL, MODEL_TOOL, ASK_TOOL, MEMORY_TOOL,
       ...(mayDelegate ? [DELEGATE_TOOL] : []),

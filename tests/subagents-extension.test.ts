@@ -236,7 +236,7 @@ test('factory implementers write only inside an external Git snapshot', async t 
     agent: 'implementer', subject: 'Change the app', task: 'Change app.txt safely.',
   })).details as Job;
   assert.equal(delegated.agent, 'implementer'); assert.equal(delegated.role, 'worker');
-  assert.ok(delegated.tools?.includes('edit')); assert.ok(!delegated.tools?.includes('bash'));
+  assert.ok(delegated.tools?.includes('edit')); assert.ok(delegated.tools?.includes('bash'), 'an implementer runs its own checks');
   assert.equal(delegated.sourceCwd, await realpath(source)); assert.notEqual(delegated.cwd, source);
   assert.match(delegated.cwd, /\.prjct.*workspaces/);
   await writeFile(join(delegated.cwd, 'app.txt'), 'snapshot\n');
@@ -244,29 +244,24 @@ test('factory implementers write only inside an external Git snapshot', async t 
   await h.emit('session_shutdown');
 });
 
-test('bash is inherited only after the operator opts a writable child in', async (t) => {
+test('workers and reviewers inherit bash by default; explorers never; PI_SUBAGENTS_ALLOW_BASH=0 turns it off', async (t) => {
   const before = process.env.PI_SUBAGENTS_ALLOW_BASH;
   t.after(() => {
     if (before === undefined) delete process.env.PI_SUBAGENTS_ALLOW_BASH;
     else process.env.PI_SUBAGENTS_ALLOW_BASH = before;
   });
   delete process.env.PI_SUBAGENTS_ALLOW_BASH;
-  const closed = host();
-  await closed.emit('session_start', { reason: 'resume' });
-  const without = (await closed.delegate({ role: 'worker' })).details as Job;
-  assert.equal(without.tools?.includes('bash'), false);
-
-  process.env.PI_SUBAGENTS_ALLOW_BASH = '1';
   const open = host();
   await open.emit('session_start', { reason: 'resume' });
-  const withBash = (await open.delegate({ role: 'worker' })).details as Job;
-  assert.equal(withBash.tools?.includes('bash'), true);
+  assert.equal(((await open.delegate({ role: 'worker' })).details as Job).tools?.includes('bash'), true);
+  assert.equal(((await open.delegate({ role: 'reviewer' })).details as Job).tools?.includes('bash'), true);
+  assert.equal(((await open.delegate({ role: 'explorer' })).details as Job).tools?.includes('bash'), false);
 
-  process.env.PI_SUBAGENTS_ALLOW_BASH = 'true';
-  const almost = host();
-  await almost.emit('session_start', { reason: 'resume' });
-  const notExact = (await almost.delegate({ role: 'worker' })).details as Job;
-  assert.equal(notExact.tools?.includes('bash'), false, 'only the documented exact value opts in');
+  process.env.PI_SUBAGENTS_ALLOW_BASH = '0';
+  const closed = host();
+  await closed.emit('session_start', { reason: 'resume' });
+  assert.equal(((await closed.delegate({ role: 'worker' })).details as Job).tools?.includes('bash'), false);
+  assert.equal(((await closed.delegate({ role: 'reviewer' })).details as Job).tools?.includes('bash'), false);
 });
 
 test('the model is this session’s unless one from its own list is asked for', async () => {

@@ -50,11 +50,22 @@ const CORE_TOOLS = new Set<string>([...READ_ONLY, 'edit', 'write', 'bash']);
  * is missing and fails the startup capability handshake. Only packages named
  * in extensionPackages bring their tools along.
  */
-export function roleTools(role: Role, active: readonly string[], allowBash = process.env.PI_SUBAGENTS_ALLOW_BASH === '1', allowExtensionTools = false): string[] {
+/**
+ * Bash is on unless the operator sets PI_SUBAGENTS_ALLOW_BASH=0. Without it a
+ * child cannot run a test or a build: it asked the parent to run its commands
+ * (35 times in one session) and timed out waiting.
+ */
+export const childBashAllowed = (env: NodeJS.ProcessEnv = process.env): boolean => env.PI_SUBAGENTS_ALLOW_BASH !== '0';
+
+/** Workers build and reviewers verify; both run commands. Explorers only read. */
+export const BASH_ROLES: readonly Role[] = ['worker', 'reviewer'];
+
+export function roleTools(role: Role, active: readonly string[], allowBash = childBashAllowed(), allowExtensionTools = false): string[] {
   const tools = active.filter(name => !name.startsWith('agent_') && !name.startsWith('subagent_'))
     .filter(name => allowExtensionTools || CORE_TOOLS.has(name));
-  if (role !== 'worker') return tools.filter(name => READ_ONLY.has(name));
-  return tools.filter(name => name !== 'bash' || (allowBash && (tools.includes('edit') || tools.includes('write'))));
+  const bash = allowBash && BASH_ROLES.includes(role);
+  if (role !== 'worker') return tools.filter(name => READ_ONLY.has(name) || (name === 'bash' && bash));
+  return tools.filter(name => name !== 'bash' || bash);
 }
 
 /** Only already-installed, explicitly named packages are resolved; no installation or ambient discovery. */

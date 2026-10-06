@@ -10,6 +10,7 @@ import {
 } from './schema.ts';
 import { ASK_JEV_DESCRIPTION, ASK_JEV_TOOL, AskJevSchema, runAskJev } from './ask-jev.ts';
 import { connectJev, type ConnectJev, type Jev } from './jev.ts';
+import { childBashAllowed } from './config.ts';
 import { post, recent } from './wire.ts';
 import { ENGLISH_RULE, repairToolArgs } from '@prjct.app/pi-tui-kit';
 
@@ -236,12 +237,12 @@ export function installGuard(
    */
   const inherited = env.PI_SUBAGENTS_TOOLS?.split(',').filter(Boolean);
   const requested = inherited ?? (mayDelegate ? [...CHILD_TOOLS, DELEGATE_TOOL] : CHILD_TOOLS);
-  const writer = requested.includes('edit') || requested.includes('write');
-  const bash = env.PI_SUBAGENTS_ALLOW_BASH === '1' && writer;
+  const bash = childBashAllowed(env) && env.PI_SUBAGENTS_ROLE !== 'explorer';
   // Enforce the opt-in again inside the child. `--tools` is the first gate;
   // this one also catches a stale job or a tool injected by another route.
   const capabilities = env.PI_SUBAGENTS_ROLE === 'explorer' || env.PI_SUBAGENTS_ROLE === 'reviewer'
-    ? new Set([...READ_ONLY_TOOLS, ...CHILD_TOOLS, DELEGATE_TOOL, WIRE_SEND_TOOL, WIRE_INBOX_TOOL]) : undefined;
+    ? new Set([...READ_ONLY_TOOLS, ...CHILD_TOOLS, DELEGATE_TOOL, WIRE_SEND_TOOL, WIRE_INBOX_TOOL,
+      ...(env.PI_SUBAGENTS_ROLE === 'reviewer' ? ['bash'] : [])]) : undefined;
   const allowed = requested.filter(tool => (tool !== 'bash' || bash) && (!capabilities || capabilities.has(tool)));
 
   /**
@@ -277,8 +278,8 @@ export function installGuard(
     const tool = String(event?.toolName ?? '');
     if (!allowed.includes(tool)) {
       const reason = tool === 'bash'
-        ? 'Bash is disabled for subagents. It is available only to a child with edit or write when '
-          + 'PI_SUBAGENTS_ALLOW_BASH=1; when enabled it is unrestricted and not a sandbox.'
+        ? 'Bash is not available to this subagent: explorers only read, and the operator can turn bash '
+          + 'off for every subagent with PI_SUBAGENTS_ALLOW_BASH=0.'
         : `${tool} is not available here. This session can ${allowed.join(', ')} and nothing else.`;
       return {
         block: true,

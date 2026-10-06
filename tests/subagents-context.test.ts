@@ -115,7 +115,8 @@ test('a child prompt names the tools it was actually given', () => {
   const worker = childPrompt({ name: 'Nadia', role: 'explorer', subject: 's', task: 't',
     tools: ['read', 'grep', 'find', 'ls', 'bash', 'edit', 'write'] });
   assert.match(worker, /edit — change a file/);
-  assert.match(worker, /Bash was explicitly enabled/);
+  assert.match(worker, /You have bash: run the tests, builds and commands the task needs yourself/);
+  assert.match(worker, /never ask the session that started you to run them/);
   assert.match(worker, /unrestricted and not sandboxed/);
   assert.match(worker, /remain fenced to the working directory/);
   assert.doesNotMatch(worker, /do not have write/);

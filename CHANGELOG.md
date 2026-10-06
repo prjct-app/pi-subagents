@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Workers and reviewers have Bash by default; explorers never do, and `PI_SUBAGENTS_ALLOW_BASH=0` turns it off for every subagent. Without it a child could not run a test or a build and asked its parent to run them (35 times in one session, several jobs timing out at 600 s). The child prompt now tells it to run its own commands and never ask the session that started it.
+
 ## Unreleased
 
 - Add `ask_jev`: a yes/no, pick-one or score judgement about files or text from Jev, without reading them into context; `each: true` asks every path in parallel. It is in the prompt only when a TypeSafe key is found, and never sends `.env`, key files or binaries.

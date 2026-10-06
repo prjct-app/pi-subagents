@@ -169,12 +169,12 @@ test('the child starts with ambient discovery off, and able to read and to repor
   assert.equal(args.some(arg => /write|edit|bash|apply/.test(arg)), false);
 });
 
-test('Bash selection requires both explicit consent and a writable child', () => {
+test('the runner honours the bash switch over what admission already gave the role', () => {
   const worker = ['read', 'bash', 'edit', 'write'];
   assert.deepEqual(selectChildTools(worker, false), ['read', 'edit', 'write']);
   assert.deepEqual(selectChildTools(worker, true), worker);
-  assert.deepEqual(selectChildTools(['read', 'bash', 'grep'], true), ['read', 'grep'],
-    'plan-mode and other readers cannot turn Bash into an undeclared write path');
+  assert.deepEqual(selectChildTools(['read', 'bash', 'grep'], true), ['read', 'bash', 'grep'],
+    'a reviewer admitted with bash keeps it to run its checks');
 });
 
 test('the runner filters stale job tools and gives the prompt the exact same Bash policy', async (t) => {
@@ -184,18 +184,18 @@ test('the runner filters stale job tools and gives the prompt the exact same Bas
     else process.env.PI_SUBAGENTS_ALLOW_BASH = before;
   });
   const inherited = ['read', 'bash', 'edit', 'write'];
-  delete process.env.PI_SUBAGENTS_ALLOW_BASH;
+  process.env.PI_SUBAGENTS_ALLOW_BASH = '0';
   const closed = await started({ tools: inherited }, live);
   assert.doesNotMatch(closed.args.at(-1) ?? '', /bash/);
   const closedPrompt = closed.child.sent.find((message: any) => message.type === 'prompt')?.message ?? '';
   assert.match(closedPrompt, /Bash is not available/);
-  assert.doesNotMatch(closedPrompt, /explicitly enabled/);
+  assert.doesNotMatch(closedPrompt, /You have bash/);
 
-  process.env.PI_SUBAGENTS_ALLOW_BASH = '1';
+  delete process.env.PI_SUBAGENTS_ALLOW_BASH;
   const open = await started({ tools: inherited }, live);
   assert.match(open.args.at(-1) ?? '', /bash/);
   const openPrompt = open.child.sent.find((message: any) => message.type === 'prompt')?.message ?? '';
-  assert.match(openPrompt, /Bash was explicitly enabled/);
+  assert.match(openPrompt, /You have bash/);
   assert.match(openPrompt, /unrestricted and not sandboxed/);
 });
 

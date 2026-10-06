@@ -197,9 +197,9 @@ export function childPrompt(input: {
     ...tools.map(line => `- ${line}`),
     '',
     bash
-      ? 'Bash was explicitly enabled by the operator. It is unrestricted and not sandboxed: the working '
-        + 'directory is only where it starts, and it may reach anything the operating-system account can. '
-        + 'Read, edit, write, grep, find, and ls remain fenced to the working directory.'
+      ? 'You have bash: run the tests, builds and commands the task needs yourself; never ask the session '
+        + 'that started you to run them. Bash is unrestricted and not sandboxed: the working directory is only '
+        + 'where it starts. Read, edit, write, grep, find, and ls remain fenced to the working directory.'
       : writer
         ? 'You may change files through the tools you were given; those file tools stay under the working '
           + 'directory. Bash is not available.'

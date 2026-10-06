@@ -1,4 +1,4 @@
-import { defaultSettings, loadSettings, roleTools, extensionPaths, agentHome } from './config.ts';
+import { BASH_ROLES, defaultSettings, loadSettings, roleTools, extensionPaths, agentHome } from './config.ts';
 import { cleanupStorage, storageRoot, sessionRoot, prepareSession, retainSettlement, resumable } from './storage.ts';
 import { inProcessRunner } from './in-process.ts';
 import type { Activity } from './activity.ts';
@@ -238,8 +238,9 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   const factoryTools = (profile: FactoryAgent | undefined, role: Role, available = inheritedTools(role)): string[] => {
     if (!profile) return available;
-    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', ASK_JEV_TOOL];
-    return available.filter(tool => safe.includes(tool) && (role === 'worker' || READ_ONLY_ABILITIES.includes(tool)));
+    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', ASK_JEV_TOOL];
+    return available.filter(tool => safe.includes(tool) && (role === 'worker' || READ_ONLY_ABILITIES.includes(tool)
+      || (tool === 'bash' && BASH_ROLES.includes(role))));
   };
   const resolveProfile = (agent?: string, legacyRole?: Role): { role: Role; profile?: FactoryAgent } => {
     // agent is the sole public selector. role is accepted only so calls emitted

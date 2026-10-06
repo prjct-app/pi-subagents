@@ -117,14 +117,17 @@ crash between acceptance and persistence can still cause a duplicate notificatio
 
 ## Roles and capabilities
 
-**`explorer`** maps code and **`reviewer`** checks evidence. Both only inherit active
-`read`, `grep`, `find` and `ls` tools. **`worker`** may inherit active mutation tools.
+**`explorer`** maps code and **`reviewer`** checks evidence. Both inherit only the active
+`read`, `grep`, `find` and `ls` file tools; a reviewer also gets `bash` so it can run the
+tests and probes it verifies with. **`worker`** may inherit active mutation tools and `bash`.
 A read-only parent cannot grant a worker edit/write permissions it does not have.
 Grandchildren cannot expand their parent's capability set.
 
 Built-in file tools are fenced to the assigned directory, including symlink
-resolution. Bash is disabled unless `PI_SUBAGENTS_ALLOW_BASH=1` and the worker
-inherits edit or write. **Bash is unrestricted, not a filesystem sandbox.**
+resolution. Workers and reviewers have Bash unless the operator sets
+`PI_SUBAGENTS_ALLOW_BASH=0`; explorers never do. Without it a child could not run
+a test or a build and asked its parent to run them instead. **Bash is unrestricted,
+not a filesystem sandbox.**
 Extension tools have their own semantics; loading their code is a trusted action,
 and this package does not sandbox arbitrary extension code.
 
@@ -189,7 +192,7 @@ Environment variables remain supported:
 
 - `PI_AGENTS_AUTO=1`: opt into automatic triage of complex typed prompts. It runs
   only while `/agents on` is active. Automatic roles remain readers.
-- `PI_SUBAGENTS_ALLOW_BASH=1`: enable unrestricted Bash for writable workers.
+- `PI_SUBAGENTS_ALLOW_BASH=0`: turn off Bash for every subagent (on by default for workers and reviewers).
 - `PI_SUBAGENTS_PI_COMMAND`: override child Pi invocation for the process runner.
 - `PI_CODING_AGENT_DIR`: Pi agent home, used for configuration and model credentials.
 - `PRJCT_HOME`: package-owned data root; defaults to `~/.prjct`.

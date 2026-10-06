@@ -197,16 +197,17 @@ test('a parent that never answers is a refusal, not a wait', () => {
   assert.deepEqual(readAnswer('{"ok":true,"text":"Accepted."}'), { ok: true, text: 'Accepted.' });
 });
 
-test('listing bash is not consent: it stays disabled without the exact opt-in', () => {
-  const { pi, call } = fakePi();
-  installGuard(pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,edit,write,subagent_report' });
-  assert.equal(call({ toolName: 'edit', input: { path: 'src/a.ts' } }, '/work'), undefined,
-    'file mutation is a separate capability');
-  assert.match(String(call({ toolName: 'bash', input: { command: 'git status' } }, '/work')?.reason),
-    /Bash is disabled/);
+test('a child that lists bash runs commands by default, and PI_SUBAGENTS_ALLOW_BASH=0 turns it off', () => {
+  const on = fakePi();
+  installGuard(on.pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_TOOLS: 'read,bash,edit,write,subagent_report' });
+  assert.equal(on.call({ toolName: 'bash', input: { command: 'npm test' } }, '/work'), undefined);
+  assert.equal(on.call({ toolName: 'edit', input: { path: 'src/a.ts' } }, '/work'), undefined);
+  const off = fakePi();
+  installGuard(off.pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_ALLOW_BASH: '0', PI_SUBAGENTS_TOOLS: 'read,bash,edit,write,subagent_report' });
+  assert.match(String(off.call({ toolName: 'bash', input: { command: 'git status' } }, '/work')?.reason), /PI_SUBAGENTS_ALLOW_BASH=0/);
 });
 
-test('opted-in bash is honestly unrestricted, not fenced by parsing shell text', () => {
+test('bash is honestly unrestricted, not fenced by parsing shell text', () => {
   const { pi, call } = fakePi();
   installGuard(pi, {
     PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_ALLOW_BASH: '1',
@@ -218,21 +219,21 @@ test('opted-in bash is honestly unrestricted, not fenced by parsing shell text',
     'there is no token parser pretending this is a sandbox');
 });
 
-test('the opt-in cannot turn a read-only child into a writer through bash', () => {
-  const { pi, call } = fakePi();
-  installGuard(pi, {
-    PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_ALLOW_BASH: '1',
-    PI_SUBAGENTS_TOOLS: 'read,bash,grep,find,ls,subagent_report',
-  });
-  assert.match(String(call({ toolName: 'bash', input: { command: 'git status' } }, '/work')?.reason),
-    /only to a child with edit or write/);
-  assert.equal(call({ toolName: 'read', input: { path: 'src/a.ts' } }, '/work'), undefined);
+test('an explorer never gets bash; a reviewer runs commands to verify', () => {
+  const explorer = fakePi();
+  installGuard(explorer.pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_ROLE: 'explorer', PI_SUBAGENTS_TOOLS: 'read,bash,grep,find,ls,subagent_report' });
+  assert.match(String(explorer.call({ toolName: 'bash', input: { command: 'git status' } }, '/work')?.reason), /explorers only read/);
+  assert.equal(explorer.call({ toolName: 'read', input: { path: 'src/a.ts' } }, '/work'), undefined);
+  const reviewer = fakePi();
+  installGuard(reviewer.pi, { PI_SUBAGENTS_CHILD: '1', PI_SUBAGENTS_ROLE: 'reviewer', PI_SUBAGENTS_TOOLS: 'read,bash,grep,find,ls,subagent_report' });
+  assert.equal(reviewer.call({ toolName: 'bash', input: { command: 'npm test' } }, '/work'), undefined);
+  assert.match(String(reviewer.call({ toolName: 'edit', input: { path: 'src/a.ts' } }, '/work')?.reason), /not available here/);
 });
 
 test('without an inherited list a child gets only read-only file tools', () => {
   const { pi, call } = fakePi();
   installGuard(pi, CHILD);
-  assert.match(String(call({ toolName: 'bash', input: { command: 'ls' } }, '/work')?.reason), /Bash is disabled/);
+  assert.match(String(call({ toolName: 'bash', input: { command: 'ls' } }, '/work')?.reason), /Bash is not available/);
 });
 
 test('the model tool is armed in a child and its ask reaches the parent as JSON', async () => {

@@ -33,23 +33,24 @@ test('default capacity starts the entire session budget in parallel', () => {
     'raising the session budget must not silently reintroduce a default queue');
 });
 
-test('readers cannot gain mutation, shell or unknown extension capabilities', () => {
+test('readers never gain file mutation or unknown extension tools; reviewers keep bash to verify', () => {
   const active = ['read', 'grep', 'edit', 'write', 'bash', 'remote_mutation', 'agent_reply', 'subagent_send'];
-  assert.deepEqual(roleTools('reviewer', active, true), ['read', 'grep']);
+  assert.deepEqual(roleTools('reviewer', active, true), ['read', 'grep', 'bash']);
+  assert.deepEqual(roleTools('reviewer', active, false), ['read', 'grep'], 'PI_SUBAGENTS_ALLOW_BASH=0 holds for reviewers too');
   assert.deepEqual(roleTools('explorer', active, true), ['read', 'grep']);
   assert.deepEqual(roleTools('worker', active, false), ['read', 'grep', 'edit', 'write'],
     'an ambient extension tool the child never loads is not inherited');
   assert.deepEqual(roleTools('worker', active, false, true), ['read', 'grep', 'edit', 'write', 'remote_mutation'],
     'explicit extension packages keep their admitted tools');
   assert.ok(roleTools('worker', active, true).includes('bash'));
-  assert.deepEqual(roleTools('worker', ['read', 'bash'], true), ['read']);
+  assert.deepEqual(roleTools('worker', ['read', 'bash'], true), ['read', 'bash']);
 });
 
 test('judgement is inherited like a way of reading, never like an extension tool', () => {
   const active = ['read', 'grep', 'edit', 'bash', 'ask_jev', 'remote_mutation'];
   assert.deepEqual(roleTools('explorer', active, true), ['read', 'grep', 'ask_jev'],
     'ask_jev reads for the reader and never writes, so a reader keeps it');
-  assert.deepEqual(roleTools('reviewer', active, true), ['read', 'grep', 'ask_jev']);
+  assert.deepEqual(roleTools('reviewer', active, true), ['read', 'grep', 'bash', 'ask_jev']);
   assert.deepEqual(roleTools('worker', active, false), ['read', 'grep', 'edit', 'ask_jev']);
 });
 

@@ -4,9 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { contains, installGuard, readAnswer } from '../src/child.ts';
-import { ASK_JEV_TOOL, runAskJev } from '../src/ask-jev.ts';
 import { ASK_PREFIX, CHILD_TOOLS, DELEGATE_TOOL, READ_ONLY_TOOLS, REPORT_TOOL } from '../src/schema.ts';
-import type { ConnectJev } from '../src/jev.ts';
 
 /** The slice of the host a guard touches, and nothing else. */
 function fakePi() {
@@ -107,49 +105,7 @@ test('nothing outside the directory it was given, symlinks included', async () =
 test('the tools a child may call are ways of reading, one judgement, and one way of reporting', () => {
   assert.deepEqual([...READ_ONLY_TOOLS], ['read', 'grep', 'find', 'ls']);
   assert.equal(READ_ONLY_TOOLS.some(tool => /write|edit|bash|apply|patch/.test(tool)), false);
-  assert.equal(CHILD_TOOLS.includes(ASK_JEV_TOOL), true, 'the judgement the guard registers is in the allowlist');
   assert.equal(CHILD_TOOLS.some(tool => /write|edit|bash|apply|patch/.test(tool)), false);
-});
-
-test('a child judges with ask_jev where its parent allowed it, and never where it did not', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'pi-subagents-jev-'));
-  try {
-    await mkdir(join(root, 'src'), { recursive: true });
-    await writeFile(join(root, 'src', 'importer.ts'), 'export function check(token) { return verify(token); }\n');
-    const seen: unknown[] = [];
-    const connect: ConnectJev = async () => async state => {
-      seen.push(state);
-      return { answer: { type: 'noul', noul: 0.93 } };
-    };
-
-    const { pi, tools, call } = fakePi();
-    installGuard(pi, { ...CHILD, PI_SUBAGENTS_TOOLS: `read,${ASK_JEV_TOOL}` }, undefined, connect);
-    const judge = tools.get(ASK_JEV_TOOL);
-    assert.ok(judge, 'the guard is what registers it: a child loads nothing else');
-    const result = await judge.execute('j1', { question: 'Does it verify tokens?', paths: ['src/importer.ts'] }, undefined, undefined, { cwd: root });
-    assert.deepEqual(JSON.parse(result.content[0].text), { answer: 'yes', p_yes: 0.93 });
-    assert.equal(result.content[0].text.includes('verify'), false, 'the answer travels back, never the file');
-    assert.equal(seen.length, 1, 'and one judgement call settles many files at once');
-    assert.equal(call({ toolName: ASK_JEV_TOOL, input: { question: 'q', paths: ['src/importer.ts'] } }, root), undefined);
-    assert.equal(call({ toolName: ASK_JEV_TOOL, input: { question: 'q', paths: ['src/importer.ts', '../private/auth.json'] } }, root).block, true,
-      'every path it may send is fenced like a read');
-
-    const narrow = fakePi();
-    installGuard(narrow.pi, { ...CHILD, PI_SUBAGENTS_TOOLS: 'read' }, undefined, connect);
-    assert.equal(narrow.tools.has(ASK_JEV_TOOL), false, 'not in the allowlist, not registered');
-
-    const keyless = fakePi();
-    installGuard(keyless.pi, { ...CHILD, PI_SUBAGENTS_TOOLS: `read,${ASK_JEV_TOOL}` }, undefined, async () => undefined);
-    await assert.rejects(() => keyless.tools.get(ASK_JEV_TOOL).execute('j2', { question: 'q', text: 'x' }), /No TypeSafe key/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('without a key, the same question is answered by reading the files instead', async () => {
-  await assert.rejects(() => runAskJev(async () => undefined, { question: 'q', text: 'x' }, '/work'), /No TypeSafe key/);
-  const answered = await runAskJev(async () => async () => ({ answer: { type: 'noul', noul: 0.06 } }), { question: 'q', text: 'x' }, '/work');
-  assert.deepEqual(answered, { answer: 'no', p_yes: 0.06 });
 });
 
 test('a child only has a way to ask for a child where its parent allowed one', () => {

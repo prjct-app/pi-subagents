@@ -6,8 +6,6 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { installJobs } from '../src/index.ts';
-import { ASK_JEV_TOOL } from '../src/ask-jev.ts';
-import type { ConnectJev } from '../src/jev.ts';
 import type { Handle, Runner, RunnerEvent } from '../src/runner.ts';
 import type { Job, Report } from '../src/schema.ts';
 import { isTerminal as isTerminalState } from '../src/schema.ts';
@@ -20,7 +18,7 @@ const good = (over: Partial<Report> = {}): Report => ({
 });
 
 /** The host, as much of it as this extension touches. */
-function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; jev?: ConnectJev; cwd?: string; workspaceRoot?: string; ledgerWriteMs?: number; statusWaitMs?: number } = {}) {
+function host(options: { models?: any[]; scoped?: any[]; complete?: (system: string, user: string) => Promise<string>; cwd?: string; workspaceRoot?: string; ledgerWriteMs?: number; statusWaitMs?: number } = {}) {
   const tools = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const renderers = new Map<string, any>();
@@ -83,8 +81,8 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
   }) as any;
   const made: any[] = [];
 
-  // No test reaches the keyring or the network: Jev is absent unless a test brings one.
-  installJobs(pi, { makeRunner, tickMs: 50, ledgerWriteMs: options.ledgerWriteMs ?? 0, statusWaitMs: options.statusWaitMs ?? 50, jev: options.jev ?? (async () => undefined), ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
+  // Tests use an isolated runner and never make model requests.
+  installJobs(pi, { makeRunner, tickMs: 50, ledgerWriteMs: options.ledgerWriteMs ?? 0, statusWaitMs: options.statusWaitMs ?? 50, ...(options.complete ? { complete: options.complete } : {}), ...(options.workspaceRoot ? { workspaceRoot: options.workspaceRoot } : {}) });
 
   const emit = async (name: string, event: unknown = {}) => {
     for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
@@ -601,7 +599,7 @@ test('a shutdown mid-triage admits no child into a session that is leaving', asy
   assert.equal(h.runs.size, 0, 'no orphan: the closed flag stopped the admission');
 });
 
-test('Jev cannot veto the session model when automatic triage is explicitly enabled', async (t) => {
+test('The active model controls when automatic triage is explicitly enabled', async (t) => {
   const auto = process.env.PI_AGENTS_AUTO;
   t.after(() => { if (auto === undefined) delete process.env.PI_AGENTS_AUTO; else process.env.PI_AGENTS_AUTO = auto; });
   process.env.PI_AGENTS_AUTO = '1';
@@ -611,7 +609,6 @@ test('Jev cannot veto the session model when automatic triage is explicitly enab
     const calls = { value: 0 };
     const h = host({
       complete: async () => { calls.value += 1; return plan; },
-      jev: async () => async () => ({ complex: { type: 'noul', noul: await answer() } }),
     });
     await h.emit('session_start', { reason: 'startup' });
     await h.commands.get('agents').handler('on', h.ctx);
@@ -624,49 +621,6 @@ test('Jev cannot veto the session model when automatic triage is explicitly enab
   assert.deepEqual(await run(async () => 0.2), { calls: 1, runs: 1 }, 'a classifier false negative cannot veto the model');
   assert.deepEqual(await run(async () => 0.9), { calls: 1, runs: 1 }, 'complex: the model writes the subtasks');
   assert.deepEqual(await run(async () => { throw new Error('timeout'); }), { calls: 1, runs: 1 }, 'a failed answer changes nothing');
-});
-
-test('ask_jev leaves the prompt when there is no key, and answers without returning the file when there is', async (t) => {
-  const absent = host();
-  absent.activeTools.names.push('ask_jev');
-  await absent.emit('session_start', { reason: 'startup' });
-  await settleTick();
-  assert.equal(absent.activeTools.names.includes('ask_jev'), false, 'no key, no tool in the prompt');
-  await assert.rejects(() => absent.tools.get('ask_jev').execute('j0', { question: 'q', text: 'x' }), /No TypeSafe key/);
-
-  const dir = await mkdtemp(join(tmpdir(), 'subagents-jev-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await writeFile(join(dir, 'session.ts'), 'export function check(token) { return verify(token); }');
-  const present = host({ cwd: dir, jev: async () => async () => ({ answer: { type: 'noul', noul: 0.97 } }) });
-  present.activeTools.names.push('ask_jev');
-  await present.emit('session_start', { reason: 'startup' });
-  await settleTick();
-  assert.equal(present.activeTools.names.includes('ask_jev'), true);
-  const result = await present.tools.get('ask_jev').execute('j1', { question: 'Does `content` validate tokens?', paths: ['session.ts'] });
-  assert.deepEqual(JSON.parse(result.content[0].text), { answer: 'yes', p_yes: 0.97 });
-  assert.equal(result.content[0].text.includes('verify'), false);
-});
-
-test('a child inherits ask_jev when this session can answer it, and nothing when it cannot', async (t) => {
-  const answered = host({ jev: async () => async () => ({ answer: { type: 'noul', noul: 0.5 } }) });
-  answered.activeTools.names.push(ASK_JEV_TOOL);
-  await answered.emit('session_start', { reason: 'resume' });
-  await settleTick();
-  assert.ok(answered.activeTools.names.includes(ASK_JEV_TOOL), 'the key is there, so the tool stays in the prompt');
-  const explorer = (await answered.delegate({ agent: 'explorer' })).details as Job;
-  assert.ok(explorer.tools?.includes(ASK_JEV_TOOL), 'the readers that read the most are the ones that need it');
-  const factory = (await answered.delegate({ agent: 'product-discovery', subject: 'Validate the problem', task: 'Research the user need.' })).details as Job;
-  assert.ok(factory.tools?.includes(ASK_JEV_TOOL), 'a factory reader judges before it opens files too');
-  await answered.emit('session_shutdown');
-
-  const keyless = host();
-  keyless.activeTools.names.push(ASK_JEV_TOOL);
-  await keyless.emit('session_start', { reason: 'resume' });
-  await settleTick();
-  const plain = (await keyless.delegate()).details as Job;
-  assert.equal(plain.tools?.includes(ASK_JEV_TOOL), false,
-    'no key: a child is never given a tool it could not call');
-  await keyless.emit('session_shutdown');
 });
 
 test('failed completion delivery retries while idle without duplicate report entries', async () => {

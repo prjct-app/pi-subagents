@@ -8,8 +8,6 @@ import {
   READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   ReportSchema, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkReport, reportProblems, type DelegateAnswer,
 } from './schema.ts';
-import { ASK_JEV_DESCRIPTION, ASK_JEV_TOOL, AskJevSchema, runAskJev } from './ask-jev.ts';
-import { connectJev, type ConnectJev, type Jev } from './jev.ts';
 import { childBashAllowed } from './config.ts';
 import { post, recent } from './wire.ts';
 import { ENGLISH_RULE, repairToolArgs } from '@prjct.app/pi-tui-kit';
@@ -45,8 +43,6 @@ export function installGuard(
   pi: ExtensionAPI,
   env: NodeJS.ProcessEnv = process.env,
   request?: (payload: string) => Promise<string | undefined>,
-  /** How the child reaches Jev. Injected so a test never touches a keyring. */
-  connect: ConnectJev = connectJev,
 ): boolean {
   repairToolArgs(pi, { subagent_report: { truncate: true }, subagent_send: { truncate: true }, subagent_ask: { truncate: true } });
   if (env.PI_SUBAGENTS_CHILD !== '1') return false;
@@ -254,25 +250,6 @@ export function installGuard(
       ...(env.PI_SUBAGENTS_ROLE === 'reviewer' ? ['bash'] : [])]) : undefined;
   const allowed = requested.filter(tool => (tool !== 'bash' || bash) && (!capabilities || capabilities.has(tool)));
 
-  /**
-   * Judgement, where the parent allowed it. The guard is what registers it,
-   * because a child loads nothing else, and the key is read on first use in the
-   * child — never passed down from the parent. A child without one is told to
-   * read the files instead.
-   */
-  const jev: { ready?: Promise<Jev | undefined> } = {};
-  if (allowed.includes(ASK_JEV_TOOL)) {
-    pi.registerTool({
-      name: ASK_JEV_TOOL,
-      label: 'Ask Jev',
-      description: ASK_JEV_DESCRIPTION,
-      parameters: AskJevSchema,
-      async execute(_toolCallId: string, input: any, signal?: AbortSignal, _onUpdate?: unknown, ctx?: any) {
-        const result = await runAskJev(() => jev.ready ??= connect(), input, String(ctx?.cwd ?? process.cwd()), signal);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], details: { input, result } };
-      },
-    } as Parameters<ExtensionAPI['registerTool']>[0]);
-  }
   if (env.PI_SUBAGENTS_VERIFY_TOOLS === '1') pi.on('session_start', (_event, ctx) => {
     const available = new Set(pi.getAllTools().map(tool => tool.name));
     ctx.ui.notify(`${READY_PREFIX}${JSON.stringify({ missing: allowed.filter(tool => !available.has(tool)) })}`, 'info');
@@ -296,8 +273,7 @@ export function installGuard(
       };
     }
     const root = String(ctx?.cwd ?? process.cwd());
-    // One path or many: ask_jev sends `paths`, and every one of them is fenced
-    // like a read, because what it cannot name it cannot hand to Jev either.
+    // Fence every path accepted by an inherited file tool.
     const asked = typeof event?.input?.path === 'string' ? [event.input.path]
       : Array.isArray(event?.input?.paths)
         ? (event.input.paths as unknown[]).filter((path): path is string => typeof path === 'string')

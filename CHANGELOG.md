@@ -1,3 +1,7 @@
+## 0.4.2 (2026-10-06)
+
+- Protect direct SDK and optional Jev requests with the published pi-secrets outbound guard.
+
 # Changelog
 
 ## 0.4.1 — 2026-10-06

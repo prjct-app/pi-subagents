@@ -1,5 +1,9 @@
 ## 0.5.0 (2026-10-06)
 
+## 0.5.1 (2026-10-06)
+
+- Forward sibling messages for the entire child lifetime, retry rejected delivery, wake idle process children, preserve complete report evidence, and allow continued delegation without purging completed history.
+
 - Remove the classifier client, tool, credentials, and classifier-based routing.
 - Preserve task language and constraints; workers and reviewers verify through the Pi SDK with inherited model/reasoning.
 - Isolate all tests from personal credentials and block native keychain access.

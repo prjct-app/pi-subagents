@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { childPrompt, neutralCatalogue, type ModelChoice } from './context.ts';
 import { factoryAgent } from './factory.ts';
-import { read as readWire } from './wire.ts';
+import { wireForwarder } from './forward-wire.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
 import { childBashAllowed } from './config.ts';
 import {
@@ -294,7 +294,7 @@ export function spawnRunner(options: {
     const pending: Pending = new Map();
     const claimed = new Map<string, unknown>();
     /** Sibling-mail forwarding state, declared before any terminal path runs. */
-    const forward = { offset: 0, spent: 0, timer: undefined as ReturnType<typeof setInterval> | undefined };
+    const forward = { timer: undefined as ReturnType<typeof setInterval> | undefined };
     const state = {
       observed: undefined as Usage | undefined,
       toolCalls: 0,
@@ -616,36 +616,14 @@ export function spawnRunner(options: {
       return { stop, steer };
     }
 
-    /**
-     * Sibling mail, pushed. Each message for this child is steered in once,
-     * tracked by byte offset so a reload of the loop repeats nothing, and a
-     * per-child budget cuts a ping-pong loop off instead of feeding it.
-     * Everything is best-effort: the file keeps what a steer could not
-     * deliver, and the child's own subagent_inbox can still read it.
-     */
-    const FORWARD_BUDGET = 24;
+    // Keep forwarding until the child ends; only it decides which mail matters.
     if (wired) {
-      const root = options.wireRoot as string;
-      const tree = job.wire as string;
-      const poll = (): void => {
-        void readWire(root, tree, forward.offset, job.name).then(async found => {
-          forward.offset = found.offset;
-          for (const message of found.messages) {
-            if (forward.spent >= FORWARD_BUDGET || state.done) return;
-            if (message.from === job.name) continue;
-            forward.spent += 1;
-            await send({
-              type: 'steer',
-              message: `Message from ${message.from}, a sibling working beside you on the same task:\n`
-                + `${message.subject}\n${message.body}\nAnswer it with subagent_send if it needs one; then get back to your task.`,
-            });
-          }
-        }).catch(() => undefined);
-      };
-      // Once now — mail posted while the child was starting is still mail —
-      // then on the interval.
-      poll();
-      forward.timer = setInterval(poll, options.wireMs ?? 2_000);
+      const poll = wireForwarder(options.wireRoot!, job.wire!, job.name, message => steer(
+        `Message from ${message.from}, a sibling working beside you on the same task:\n`
+          + `${message.subject}\n${message.body}\nAnswer it with subagent_send if it needs one; then get back to your task.`,
+      ), () => state.done);
+      void poll();
+      forward.timer = setInterval(() => { void poll(); }, options.wireMs ?? 2_000);
       forward.timer.unref?.();
     }
 

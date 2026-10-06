@@ -91,6 +91,16 @@ test('only as many children run at once as the session allows', () => {
   assert.deepEqual(startable(one, throttled).map(job => job.id), [c.job.id], 'a slot frees as one settles');
 });
 
+test('completed delivered history never exhausts a long session admission budget', () => {
+  const first = accept(emptyLedger('long-session'));
+  const report = { ...good(), criteria: [], findings: [] };
+  const finished = markDelivered(settle(first.ledger, first.job.id, {kind: 'reported', report}, NOW + 1), [first.job.id], NOW + 2);
+  const result = admit(finished, ask() as any, NOW + 3, {...DEFAULT_LIMITS, jobs: 1});
+  assert.ok(result.ok);
+  assert.equal(result.ledger.jobs.length, 2, 'the old report stays available; admission does not purge history');
+  assert.equal(admit(first.ledger, ask() as any, NOW + 3, {...DEFAULT_LIMITS, jobs: 1}).ok, false, 'outstanding work still consumes capacity');
+});
+
 test('a report decides the outcome only after it validates', () => {
   const { job, ledger } = accept(emptyLedger('s1'));
   const live1 = running(starting(ledger, job.id, NOW), job.id);

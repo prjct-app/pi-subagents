@@ -44,7 +44,7 @@ export function installGuard(
   env: NodeJS.ProcessEnv = process.env,
   request?: (payload: string) => Promise<string | undefined>,
 ): boolean {
-  repairToolArgs(pi, { subagent_report: { truncate: true }, subagent_send: { truncate: true }, subagent_ask: { truncate: true } });
+  repairToolArgs(pi);
   if (env.PI_SUBAGENTS_CHILD !== '1') return false;
   // Isolated children do not load ambient extensions. Protect their own model
   // requests too, including new sensitive data read by their tools.

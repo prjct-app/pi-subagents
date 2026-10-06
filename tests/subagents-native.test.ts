@@ -73,6 +73,22 @@ for (const backend of ['process', 'in-process'] as const) {
     assert.ok(continuationEvents.some(event => event.type === 'settled'), JSON.stringify(continuationEvents));
   });
 
+  test(`${backend}: the full report survives native SDK validation`, { timeout: 30000 }, async t => {
+    const directory = await mkdtemp(join(tmpdir(), 'agents-report-evidence-'));
+    const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = directory;
+    const factory = backend === 'process' ? spawnRunner : inProcessRunner;
+    const events: RunnerEvent[] = [];
+    const runner = factory({ guardPath: join(root, 'src', 'child.ts'), extensionPaths: [fixture], invoke: args => ({command: process.execPath, args: [cli, ...args]}) });
+    const handle = await runner(job(directory, {task: 'fixture-many-findings'}), event => events.push(event));
+    t.after(async () => { await handle.stop('test over'); if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; await rm(directory, {recursive: true, force: true}); });
+    await until(() => events.some(event => event.type === 'settled' || event.type === 'failed'));
+    const settled = events.find(event => event.type === 'settled') as Extract<RunnerEvent, {type: 'settled'}>;
+    assert.ok(settled, JSON.stringify(events));
+    const report = settled.report as {findings: {detail: string}[]};
+    assert.equal(report.findings.length, 60);
+    assert.equal(report.findings.at(-1)?.detail, 'CRITICAL_TAIL');
+  });
+
   test(`${backend}: unavailable model fails explicitly and cancellation stops a native turn`, { timeout: 30000 }, async t => {
     const directory = await mkdtemp(join(tmpdir(), 'agents-native-stop-'));
     const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = directory;

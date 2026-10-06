@@ -152,8 +152,8 @@ the parent session starts again.
 }
 ```
 
-`jobs` is a cumulative per-parent-session budget, including continuations;
-completed jobs do not refund it. By default `concurrency` equals that budget, so every
+`jobs` limits outstanding work, including continuations. Completed, delivered
+and resolved history does not consume admission capacity and remains available. By default `concurrency` equals that budget, so every
 accepted subagent starts as an independent runner in parallel. Set a smaller concurrency
 value only when an operator explicitly wants a resource throttle and queued work.
 The clock covers the entire tree from admission, including queued time. Running roots receive
@@ -226,3 +226,5 @@ for `prjct-app/pi-subagents`, workflow `publish.yml`, then dispatch it on a matc
 `vX.Y.Z` tag. It verifies the version, runs checks, and publishes with provenance.
 No long-lived npm token is stored in the workflow. See
 [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for registry setup.
+
+Sibling messages are forwarded for the full child lifetime, including after message 24. Failed deliveries retry without duplicating accepted messages. Reports preserve every criterion, finding and blocker without arbitrary count or text caps.

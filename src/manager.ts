@@ -38,6 +38,7 @@ export const DEFAULT_LIMITS: Limits = {
 };
 
 export type Request = {
+  thinkingLevel?: Job['thinkingLevel'];
   resumedFrom?: string;
   resumeSession?: string;
   runner?: 'process' | 'in-process';
@@ -196,6 +197,7 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
     context: request.context ?? '',
     provider: request.provider,
     modelId: request.modelId,
+    ...(request.thinkingLevel ? { thinkingLevel: request.thinkingLevel } : {}),
     cwd: request.cwd,
     ...(request.sourceCwd ? { sourceCwd: request.sourceCwd } : {}),
     ...(request.workspace ? { workspace: request.workspace } : {}),

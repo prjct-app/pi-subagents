@@ -1,13 +1,13 @@
-import { BASH_ROLES, defaultSettings, loadSettings, roleTools, extensionPaths, agentHome } from './config.ts';
+import { BASH_ROLES, defaultSettings, loadSettings, roleTools, inheritedCapabilities, extensionPaths, agentHome } from './config.ts';
 import { cleanupStorage, storageRoot, sessionRoot, prepareSession, retainSettlement, resumable } from './storage.ts';
 import { inProcessRunner } from './in-process.ts';
 import type { Activity } from './activity.ts';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { StringEnum } from '@earendil-works/pi-ai';
-import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
+import { ModelRuntime, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Container, Key, Text } from '@earendil-works/pi-tui';
-import { ENGLISH_RULE, SYMBOL, brand, completer, row, sessionComplete, setMode, toEnglishFields, toEnglishInstructions, repairToolArgs } from '@prjct.app/pi-tui-kit';
+import { ENGLISH_RULE, SYMBOL, brand, completer, row, setMode, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { Type } from 'typebox';
 import { choiceHint, eligible, findChoice, modelKey, resolveWorkDir, type ModelChoice } from './context.ts';
 import { makeJobs, type Jobs } from './jobs.ts';
@@ -16,7 +16,7 @@ import { delegateResultView, needsAttention, jobView, ledgerLines, ledgerView, r
 import { childMemory, getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
-import { AUTO_MAX, COMPLEX_QUESTION, TRIAGE_SYSTEM, parseTriage, ruledOut, worthTriaging } from './auto.ts';
+import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
 import { ASK_JEV_DESCRIPTION, ASK_JEV_TOOL, AskJevSchema, headline, kindOf, runAskJev } from './ask-jev.ts';
 import { connectJev, type ConnectJev, type Jev } from './jev.ts';
 import { selectSpecificationTopics } from './checklist.ts';
@@ -58,9 +58,9 @@ const LEDGER_WRITE_MS = 1_000;
 export type JobsOptions = {
   /** The mailbox thread a job belongs to, when it was born inside one. */
   activeRoot?: () => string | undefined;
-  /** Injected by the tests; the real one spawns `pi`. */
+  /** Injected by the tests; the default uses the public Pi SDK. */
   makeRunner?: typeof spawnRunner;
-  /** Injected by the tests; the real one asks the cheapest model on the registry. */
+  /** Injected by the tests; the default uses the parent session's model and reasoning. */
   complete?: (system: string, user: string, ctx: ExtensionContext) => Promise<string>;
   /** Injected by the tests; the real one reads the shared TypeSafe key. */
   jev?: ConnectJev;
@@ -224,13 +224,15 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
    * this package's own parent tools — a child asks for children through the
    * guard, never through agent_delegate. In plan mode the active set is
    * already read-only, so a child born there is a reader too. Bash is a
-   * separate, explicit capability: it is inherited only by a writable child
-   * when the operator opted in, and it is never described as a sandbox.
+   * separate capability: workers and reviewers inherit it unless the operator
+   * disables it, and it is never described as a sandbox.
    */
   const inheritedTools = (role: Role): string[] => {
     try {
       const active = pi.getActiveTools().filter(name => name !== 'agent_delegate' && name !== 'agent_jobs');
-      return roleTools(role, active, undefined, state.settings.extensionPackages.length > 0);
+      const paths = extensionPaths(state.settings.extensionPackages, ctx().cwd);
+      const admitted = inheritedCapabilities(active, paths.length ? pi.getAllTools() : [], paths);
+      return roleTools(role, admitted, undefined, paths.length > 0);
     } catch {
       return [...READ_ONLY_ABILITIES];
     }
@@ -267,16 +269,17 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
    * this session does not have (a stale instruction, a model recalled from
    * memory) runs on the session's own model instead of failing the delegation.
    */
-  const resolve = (wanted?: string): { provider: string; modelId: string } | { refused: string } => {
+  const resolve = (wanted?: string): { provider: string; modelId: string; thinkingLevel?: Job['thinkingLevel'] } | { refused: string } => {
     const current = (state.ctx as any)?.model;
+    const thinkingLevel = state.ctx?.thinkingLevel;
     const exact = choiceFor(wanted);
-    if (exact) return { provider: exact.provider, modelId: exact.modelId };
-    const own = current?.provider && current?.id ? { provider: current.provider as string, modelId: current.id as string } : undefined;
+    if (exact) return { provider: exact.provider, modelId: exact.modelId, thinkingLevel };
+    const own = current?.provider && current?.id ? { provider: current.provider as string, modelId: current.id as string, thinkingLevel } : undefined;
     if (!wanted?.trim()) return own ?? { refused: 'This session has no model to give a job.' };
     // A scoped session scopes its children too: the stand-in comes from the list.
     const inList = own && state.choices.some(choice => choice.provider === own.provider && choice.modelId === own.modelId);
     const standIn = inList ? own : state.choices[0];
-    return standIn ? { provider: standIn.provider, modelId: standIn.modelId } : { refused: 'This session has no model to give a job.' };
+    return standIn ? { provider: standIn.provider, modelId: standIn.modelId, thinkingLevel } : { refused: 'This session has no model to give a job.' };
   };
 
   /** Said once in the delegation result when the asked-for model was not available. */
@@ -357,16 +360,17 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     try {
       const choice = resolveProfile(ask.agent, ask.role);
       if (choice.profile?.explicitOnly) return { ok: false, text: `${choice.profile.name} requires an explicit request from the user.` };
-      const model = resolve(ask.model);
+      const model = ask.model?.trim() ? resolve(ask.model)
+        : { provider: parent.provider, modelId: parent.modelId, thinkingLevel: parent.thinkingLevel };
       if ('refused' in model) return { ok: false, text: model.refused };
       const workspace = await externalWorkspace(choice.profile, parent.cwd);
-      const asked = await englishFields({ subject: ask.subject, task: ask.task, context: ask.context });
+      const asked = { subject: ask.subject, task: ask.task, context: ask.context };
       const decision = await jobs.delegate({
         role: choice.role, ...(choice.profile ? { agent: choice.profile.name } : {}),
         subject: asked.subject.slice(0, 160), task: asked.task, context: asked.context,
         // A grandchild inherits what its parent was given, never more — tools,
         // and the wire: the whole tree talks on one file.
-        tools: factoryTools(choice.profile, choice.role, roleTools(choice.role, parent.tools ?? READ_ONLY_TOOLS)), runner: state.settings.runner,
+        tools: factoryTools(choice.profile, choice.role, roleTools(choice.role, parent.tools ?? READ_ONLY_TOOLS, undefined, true)), runner: state.settings.runner,
         ...(parent.wire ? { wire: parent.wire } : {}),
         ...model, cwd: workspace?.cwd ?? parent.cwd,
         ...(workspace ? workspace : {}),
@@ -409,46 +413,24 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     setMode(context, 'agents', text);
   };
 
-  /** One bounded answer from the cheapest model this session can reach. */
+  /** Explicit automatic triage uses the same intelligence as the parent session. */
   const complete = options.complete ?? (async (system: string, user: string, context: ExtensionContext): Promise<string> => {
-    const cheapest = state.choices[0];
-    const registry = (context as any).modelRegistry;
-    const model = cheapest
-      ? registry?.getAvailable?.().find((m: any) => m?.provider === cheapest.provider && m?.id === cheapest.modelId)
-      : undefined;
+    if (!context.model) return '';
+    const registry = context.modelRegistry as typeof context.modelRegistry & Partial<Pick<ModelRuntime, 'streamSimple'>>;
+    const runtime = registry.streamSimple ? undefined : await ModelRuntime.create({ allowModelNetwork: false });
+    const model = registry.streamSimple ? context.model : runtime!.getModel(context.model.provider, context.model.id);
     if (!model) return '';
-    const { completeSimple } = await import('@earendil-works/pi-ai/compat');
-    const reply = await completeSimple(model, {
+    const request = {
       systemPrompt: system,
-      messages: [{ role: 'user', content: user, timestamp: Date.now() }],
-    } as any);
-    return (reply.content ?? []).filter((c: any) => c?.type === 'text').map((c: any) => c.text).join('\n');
+      messages: [{ role: 'user' as const, content: user, timestamp: Date.now() }],
+    };
+    const settings = { reasoning: context.thinkingLevel === 'off' ? undefined : context.thinkingLevel ?? 'medium',
+      maxTokens: Math.min(model.maxTokens, 8192), signal: AbortSignal.timeout(120_000) };
+    const reply = registry.streamSimple ? await registry.streamSimple(model, request, settings).result()
+      : await runtime!.completeSimple(model, request, settings);
+    if (reply.stopReason === 'error' || reply.stopReason === 'aborted') return '';
+    return reply.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
   });
-
-  /**
-   * Every instruction a child receives is English. Text the parent model wrote
-   * is asked for in English at the source; this rewrites what still is not,
-   * and what the person typed, with the session's own model, never a cheaper
-   * one that would blur the task before the child reads it. English passes
-   * without a call, and a failed rewrite delivers the original.
-   */
-  const translate = (system: string, user: string): Promise<string> =>
-    options.complete ? options.complete(system, user, ctx()) : sessionComplete(ctx())(system, user);
-  const english = (text: string): Promise<string> => toEnglishInstructions(text, translate);
-  const englishFields = <T extends Record<string, string | undefined>>(fields: T): Promise<T> =>
-    toEnglishFields(fields, translate);
-
-  /** Jev's probability that the prompt is complex, or undefined when Jev is not there to ask. */
-  const complexity = async (prompt: string): Promise<number | undefined> => {
-    const jev = await state.jev;
-    if (!jev) return undefined;
-    try {
-      const answer = (await jev({ task: prompt.slice(0, 8000) }, COMPLEX_QUESTION)).complex;
-      return answer?.type === 'noul' ? answer.noul : undefined;
-    } catch {
-      return undefined;
-    }
-  };
 
   /**
    * Triage one typed prompt, and launch what it earns.
@@ -460,8 +442,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const triageAndLaunch = async (prompt: string, context: ExtensionContext): Promise<void> => {
     const jobs = state.jobs;
     if (!jobs || state.closed) return;
-    // Most prompts end here, on one cheap answer, without a model writing a plan.
-    if (ruledOut(await complexity(prompt)) || state.closed) return;
     const plan = parseTriage(await complete(TRIAGE_SYSTEM, `Working directory: ${context.cwd}\n\nTask:\n${prompt}`, context));
     // The triage call outlives nothing: a shutdown that landed while it ran
     // must not find a fresh child beside a session that is gone.
@@ -474,7 +454,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       const rootId = activeRoot();
       const decision = await jobs.delegate({
         role: subtask.role, subject: subtask.subject, task: subtask.task,
-        context: `The person asked the session you are assisting:\n${await english(prompt.slice(0, 800))}`,
+        context: `The person asked the session you are assisting:\n${prompt}`,
         ...model, cwd: context.cwd, depth: 0, tools: inheritedTools(subtask.role), runner: state.settings.runner, key,
         ...(rootId ? { rootId } : {}),
       });
@@ -559,7 +539,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   const steerJob = async (jobId: string, message: string): Promise<boolean> => {
     if (!message.trim() || message.length > 4000) throw new Error('Send between 1 and 4,000 characters.');
-    const sent = await state.jobs?.steerTo(jobId, await english(message)) ?? false;
+    const sent = await state.jobs?.steerTo(jobId, message) ?? false;
     if (sent) {
       state.jobs?.question(jobId, undefined);
       state.jobs?.record(jobId, { kind: 'message', text: `You: ${message}` });
@@ -579,9 +559,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const model = resolve(`${original.provider}/${original.modelId}`);
     if ('refused' in model) throw new Error(model.refused);
     const result = await jobs.delegate({ role: original.role, ...(original.agent ? { agent: original.agent } : {}),
-      subject: original.subject, task: await english(message),
+      subject: original.subject, task: message,
       context: 'Continue the retained conversation. Previous reports are historical; return a new report for this request.',
-      ...model, cwd: dir.cwd, ...(original.sourceCwd ? { sourceCwd: original.sourceCwd } : {}),
+      ...model, thinkingLevel: original.thinkingLevel ?? model.thinkingLevel,
+      cwd: dir.cwd, ...(original.sourceCwd ? { sourceCwd: original.sourceCwd } : {}),
       ...(original.workspace ? { workspace: original.workspace } : {}), ...(original.patchFile ? { patchFile: original.patchFile } : {}),
       tools: allowed, depth: 0, key, rootId: original.rootId,
       resumedFrom: original.id, resumeSession: sessionFile, runner: state.settings.runner });
@@ -631,7 +612,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         if (topics === undefined) throw new Error('Specification clarification was cancelled.');
         const clarification = choice.profile?.name === 'specification-architect'
           ? `Operator clarification focus: ${topics.length ? topics.join(', ') : 'no additional topics selected'}. Ask concise follow-up questions only where consequential uncertainty remains.` : '';
-        const given = await englishFields({ subject: String(input.subject), task: String(input.task), context: [input.context, clarification].filter(Boolean).join('\n\n') });
+        const given = { subject: String(input.subject), task: String(input.task), context: [input.context, clarification].filter(Boolean).join('\n\n') };
         const delegatedContext = given.context;
         if (Buffer.byteLength(given.task, 'utf8') + Buffer.byteLength(delegatedContext, 'utf8') > state.settings.limits.taskBytes) throw new Error('Task and clarification context exceed the configured delegation limit.');
         const workspace = await externalWorkspace(choice.profile, dir.cwd);

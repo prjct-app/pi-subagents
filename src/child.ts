@@ -21,8 +21,8 @@ import { ENGLISH_RULE, repairToolArgs } from '@prjct.app/pi-tui-kit';
  * also means none of the guards an ambient extension would have brought. This
  * file is what a child has instead: the one way to report, and the allowlist
  * around the tools it inherited. File tools are fenced to the working tree.
- * Bash is absent unless the operator explicitly opts in; when present it is
- * unrestricted, because parsing shell text is not a sandbox.
+ * Workers and reviewers inherit Bash unless the operator disables it; when
+ * present it is unrestricted, because parsing shell text is not a sandbox.
  *
  * It arms itself only inside a child this package spawned. Loaded anywhere else
  * it does nothing at all, because a guard that strips a person's tools because
@@ -112,8 +112,8 @@ export function installGuard(
     name: MODEL_TOOL,
     label: 'Choose your model',
     description: 'List the models this machine can run, or switch this session to one. You start on '
-      + 'the model the session that asked had. Choose by the task in front of you: reading and '
-      + 'mapping rarely need the expensive one, judgement does. Switching is instant.',
+      + 'the model and reasoning level the session that asked had. Choose by the capabilities '
+      + 'the task needs; price alone does not establish capability. Switching is instant.',
     parameters: Type.Object({
       action: StringEnum(['list', 'use'] as const),
       provider: Type.Optional(Type.String({ maxLength: 128 })),
@@ -238,7 +238,7 @@ export function installGuard(
   const inherited = env.PI_SUBAGENTS_TOOLS?.split(',').filter(Boolean);
   const requested = inherited ?? (mayDelegate ? [...CHILD_TOOLS, DELEGATE_TOOL] : CHILD_TOOLS);
   const bash = childBashAllowed(env) && env.PI_SUBAGENTS_ROLE !== 'explorer';
-  // Enforce the opt-in again inside the child. `--tools` is the first gate;
+  // Enforce the operator's switch again inside the child. The admitted tools are the first gate;
   // this one also catches a stale job or a tool injected by another route.
   const capabilities = env.PI_SUBAGENTS_ROLE === 'explorer' || env.PI_SUBAGENTS_ROLE === 'reviewer'
     ? new Set([...READ_ONLY_TOOLS, ...CHILD_TOOLS, DELEGATE_TOOL, WIRE_SEND_TOOL, WIRE_INBOX_TOOL,

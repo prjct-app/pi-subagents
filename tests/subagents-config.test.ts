@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm, symlink, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { defaultSettings, loadSettings, roleTools } from '../src/config.ts';
+import { defaultSettings, loadSettings, roleTools, inheritedCapabilities } from '../src/config.ts';
 import { cleanupStorage, prepareSession, retainSettlement, resumable, sessionRoot } from '../src/storage.ts';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { newJobId, type Job } from '../src/schema.ts';
@@ -29,8 +29,20 @@ test('layered settings validate every field and preserve lower-layer values', as
 
 test('default capacity starts the entire session budget in parallel', () => {
   const settings = defaultSettings();
+  assert.equal(settings.runner, 'in-process', 'native sessions use the Pi SDK by default');
   assert.equal(settings.limits.concurrency, settings.limits.jobs,
     'raising the session budget must not silently reintroduce a default queue');
+});
+
+test('one configured child package does not inherit every unrelated parent extension', () => {
+  const active = ['read', 'bash', 'write', 'mcp', 'answer', 'fixture_tool'];
+  const definitions = [
+    { name: 'mcp', sourceInfo: { path: '/extensions/pi-mcp/index.js' } },
+    { name: 'answer', sourceInfo: { path: '/extensions/pi-answer/index.js' } },
+    { name: 'fixture_tool', sourceInfo: { path: '/extensions/fixture/index.js' } },
+  ];
+  assert.deepEqual(inheritedCapabilities(active, definitions, ['/extensions/provider-only/index.js']), ['read', 'bash', 'write']);
+  assert.deepEqual(inheritedCapabilities(active, definitions, ['/extensions/fixture/index.js']), ['read', 'bash', 'write', 'fixture_tool']);
 });
 
 test('readers never gain file mutation or unknown extension tools; reviewers keep bash to verify', () => {

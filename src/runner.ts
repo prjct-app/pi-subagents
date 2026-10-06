@@ -261,6 +261,7 @@ export function spawnRunner(options: {
     ])];
     const sessionFile = options.prepare ? await options.prepare(job) : undefined;
     const args = childArgs(options.guardPath, tools);
+    if (job.thinkingLevel) args.push('--thinking', job.thinkingLevel);
     if (sessionFile) args.push('--session', sessionFile);
     for (const path of options.extensionPaths ?? []) args.push('-e', path);
     const launch = invoke(args);

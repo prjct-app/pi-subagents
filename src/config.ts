@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
@@ -9,7 +9,7 @@ export type Settings = { runner: 'process' | 'in-process'; retentionDays: number
 export const agentHome = (): string => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');
 /** Package-owned state stays outside both Pi's resource tree and client repositories. */
 export const prjctHome = (): string => process.env.PRJCT_HOME ?? join(homedir(), '.prjct');
-export const defaultSettings = (): Settings => ({ runner: 'process', retentionDays: 7, workspaceRetentionHours: 24, artifactPolicy: 'requested', extensionPackages: [], limits: { ...DEFAULT_LIMITS } });
+export const defaultSettings = (): Settings => ({ runner: 'in-process', retentionDays: 7, workspaceRetentionHours: 24, artifactPolicy: 'requested', extensionPackages: [], limits: { ...DEFAULT_LIMITS } });
 
 /** Invalid fields do not erase a valid value from the lower configuration layer. */
 export function loadSettings(cwd: string, home = agentHome(), warn: (text: string) => void = console.warn): Settings {
@@ -44,6 +44,15 @@ export function loadSettings(cwd: string, home = agentHome(), warn: (text: strin
 
 const READ_ONLY = new Set<string>(READ_ONLY_ABILITIES);
 const CORE_TOOLS = new Set<string>([...READ_ONLY, 'edit', 'write', 'bash']);
+
+/** Only tools belonging to the packages the child actually loads may cross. */
+export function inheritedCapabilities(active: readonly string[], definitions: readonly { name: string; sourceInfo?: { path: string } }[],
+  paths: readonly string[]): string[] {
+  const canonical = (path: string): string => { try { return realpathSync(path); } catch { return resolve(path); } };
+  const loaded = new Set(paths.map(canonical));
+  const extras = new Set(definitions.filter(tool => tool.sourceInfo && loaded.has(canonical(tool.sourceInfo.path))).map(tool => tool.name));
+  return active.filter(name => CORE_TOOLS.has(name) || extras.has(name));
+}
 
 /**
  * A child starts with --no-extensions, so a third-party tool it did not load

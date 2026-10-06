@@ -11,7 +11,7 @@ import { checkReport, isTerminal, newJobId, ROLES, type Job, type JobState, type
 export type Limits = {
   /** Live child processes across every delegation in one parent session. */
   concurrency: number;
-  /** Accepted jobs per parent session, kept across a reload. */
+  /** Outstanding jobs per parent session; retained completed history is free. */
   jobs: number;
   /** Task and context together, in bytes. */
   taskBytes: number;
@@ -178,7 +178,8 @@ export function admit(ledger: Ledger, request: Request, now: number, limits: Lim
       return { ok: false, reason: `This tree has spent its ${limits.descendants} delegations. Report what is known instead of dividing it again.` };
     }
   }
-  if (ledger.jobs.length >= limits.jobs) {
+  const finished = new Set(purgeable(ledger).map(job => job.id));
+  if (ledger.jobs.filter(job => !finished.has(job.id)).length >= limits.jobs) {
     return { ok: false, reason: `This session holds ${limits.jobs} jobs that are still running, undelivered, or unresolved. Resolve or cancel some (agent_jobs), purge a finished one by id (agent_jobs purge), or raise limits.jobs in prjct-subagents.json.` };
   }
 

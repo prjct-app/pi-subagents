@@ -187,20 +187,20 @@ export const isTerminal = (state: JobState): boolean => TERMINAL.includes(state)
  */
 export const ReportSchema = Type.Object({
   outcome: StringEnum(['completed', 'blocked', 'failed'] as const),
-  summary: Type.String({ minLength: 1, maxLength: 4000 }),
+  summary: Type.String({ minLength: 1 }),
   /** Acceptance criteria the child derived from the task it was given. */
   criteria: Type.Array(Type.Object({
-    criterion: Type.String({ minLength: 1, maxLength: 500 }),
+    criterion: Type.String({ minLength: 1 }),
     met: StringEnum(MET),
-    evidence: Type.String({ maxLength: 1000 }),
-  }), { maxItems: 20 }),
+    evidence: Type.String(),
+  })),
   findings: Type.Array(Type.Object({
-    detail: Type.String({ minLength: 1, maxLength: 1000 }),
+    detail: Type.String({ minLength: 1 }),
     file: Type.Optional(Type.String({ maxLength: 4096 })),
     line: Type.Optional(Type.Integer({ minimum: 1 })),
-  }), { maxItems: 40 }),
+  })),
   /** What stopped it, and exactly what it needs. The parent owns these. */
-  blockers: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 10 }),
+  blockers: Type.Array(Type.String({ minLength: 1 })),
   /** Files it changed, as data: the same shape every reply in PI uses. Omitted when it changed nothing. */
   files: Type.Optional(ChangeReplySchema.properties.files),
   /** Checks it actually ran, and whether each passed. */

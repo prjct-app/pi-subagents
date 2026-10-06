@@ -5,7 +5,7 @@ import { activityOf } from './activity.ts';
 import { childPrompt, neutralCatalogue } from './context.ts';
 import { factoryAgent } from './factory.ts';
 import { rememberFor, taskMemory, within, type Runner, type RunnerEvent, type spawnRunner } from './runner.ts';
-import { read as readWire } from './wire.ts';
+import { wireForwarder } from './forward-wire.ts';
 import { ASK_TOOL, DELEGATE_TOOL, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk, type DelegateAnswer } from './schema.ts';
 
 type Options = Parameters<typeof spawnRunner>[0];
@@ -13,7 +13,7 @@ type Options = Parameters<typeof spawnRunner>[0];
 /** Native Pi sessions with explicit resources and per-session state; never mutates process.env or cwd. */
 export function inProcessRunner(options: Options): Runner {
   return async (job, emit) => {
-    const slot: { session?: AgentSession; done: boolean; stop?: Promise<void>; timer?: ReturnType<typeof setInterval>; offset: number; forwarding: boolean; sent: number; nudged: boolean } = { done: false, offset: 0, forwarding: false, sent: 0, nudged: false };
+    const slot: { session?: AgentSession; done: boolean; stop?: Promise<void>; timer?: ReturnType<typeof setInterval>; nudged: boolean } = { done: false, nudged: false };
     const mayDelegate = Boolean(options.onDelegate) && job.depth + 1 < (options.depth ?? 2);
     const wired = Boolean(options.wireRoot && job.wire);
     // Admission already removed ambient extension tools unless their packages
@@ -129,18 +129,11 @@ export function inProcessRunner(options: Options): Runner {
       if (file) emit({ type: 'session', file });
       emit({ type: 'running' });
       if (wired) {
-        slot.timer = setInterval(() => {
-          if (slot.forwarding || slot.done || slot.sent >= 24) return;
-          slot.forwarding = true;
-          void readWire(options.wireRoot!, job.wire!, slot.offset, job.name).then(async found => {
-            slot.offset = found.offset;
-            for (const message of found.messages) {
-              if (message.from === job.name || slot.sent >= 24 || slot.done) continue;
-              slot.sent += 1;
-              await steer(`Message from ${message.from}: ${message.subject}\n${message.body}`);
-            }
-          }).catch(() => undefined).finally(() => { slot.forwarding = false; });
-        }, options.wireMs ?? 2_000);
+        const forward = wireForwarder(options.wireRoot!, job.wire!, job.name,
+          message => steer(`Message from ${message.from}: ${message.subject}\n${message.body}`),
+          () => slot.done);
+        void forward();
+        slot.timer = setInterval(() => { void forward(); }, options.wireMs ?? 2_000);
         slot.timer.unref?.();
       }
       const memory = await taskMemory(job, options.memory);

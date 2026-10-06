@@ -326,14 +326,14 @@ export const JobSchema = Type.Object({
 });
 
 /**
- * What is written to the parent's session so a reload can recover. Bounded by
- * construction: the task, the context and the report are already capped, and
- * nothing here carries a transcript or an RPC stream.
+ * What is written to the parent's session so a reload can recover. Admission
+ * bounds outstanding work, not the completed evidence retained by a session.
+ * Nothing here carries a transcript or an RPC stream.
  */
 export const LedgerSchema = Type.Object({
   v: Type.Union([Type.Literal(1), Type.Literal(2)]),
   session: id,
-  jobs: Type.Array(JobSchema, { maxItems: 256 }),
+  jobs: Type.Array(JobSchema),
 });
 export type Ledger = { v: 1 | 2; session: string; jobs: Job[] };
 

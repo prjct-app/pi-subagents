@@ -233,7 +233,7 @@ export function agentsPanel(source: PanelSource, tui: TUI, theme: Theme, done: (
     const header = [identity, title, tabs];
     const content = state.tab === 0 ? activityLines(job, width) : state.tab === 1 ? report(job, width) : [
       accent('TASK'), ...paragraphs(job.task, width), '', accent('EXECUTION'), ...paragraphs(`ID: ${job.id}\nDirectory: ${job.cwd}${job.sourceCwd ? `\nSource: ${job.sourceCwd}` : ''}${job.patchFile ? `\nPatch: ${job.patchFile}` : ''}\nModel: ${job.provider}/${job.modelId}\nRunner: ${job.runner ?? 'process'}\nTools: ${(job.tools ?? []).join(', ')}\nSession: ${job.sessionFile ?? 'not created yet'}${job.resumedFrom ? `\nContinues: ${job.resumedFrom}` : ''}`, width),
-      ...(source.limits ? ['', accent('LIMITS'), ...paragraphs(`${source.ledger()?.jobs.length ?? 0}/${source.limits().jobs} runs · ${source.limits().concurrency} concurrent\n${source.limits().timeoutMs / 1000}s per tree · depth ${source.limits().depth} · ${source.limits().descendants} descendants`, width)] : [])];
+      ...(source.limits ? ['', accent('LIMITS'), ...paragraphs(`${source.ledger()?.jobs.length ?? 0} runs retained · ${source.limits().jobs} outstanding max · ${source.limits().concurrency} concurrent\n${source.limits().timeoutMs / 1000}s per tree · depth ${source.limits().depth} · ${source.limits().descendants} descendants`, width)] : [])];
     const wrapped = content.flatMap(line => wrapTextWithAnsi(line, Math.max(1, width)));
     const room = Math.max(1, height - header.length);
     state.pageHeight = room;

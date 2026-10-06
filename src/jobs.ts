@@ -45,8 +45,8 @@ export type Jobs = {
   /** Come back from a reload: nothing open survives, and nothing is replayed. */
   restore(saved: Ledger | undefined): Promise<void>;
   /**
-   * Forget finished jobs the parent already has reports for (or the named
-   * ones, if they qualify), freeing the session budget. Returns what went.
+   * Explicitly forget finished jobs the parent already has reports for (or
+   * the named ones, if they qualify). Returns what went.
    */
   purge(jobIds?: readonly string[]): Job[];
   /** Mark a finished job's blockers as handled. False when it is not finished. */
@@ -189,9 +189,8 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
     },
 
     async delegate(request) {
-      // A full budget is never spent on work that already reported: finished,
-      // delivered jobs make room before a new one is refused.
-      if (store.ledger.jobs.length >= limits.jobs) forget();
+      // Admission counts outstanding work. Retain completed evidence until an
+      // explicit purge so reloads, continuations and call deduplication keep it.
       const decision = admit(store.ledger, request, wiring.now(), limits);
       if (!decision.ok || decision.repeated) return decision;
       commit(decision.ledger);

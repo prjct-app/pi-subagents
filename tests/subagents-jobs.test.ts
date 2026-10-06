@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { makeJobs } from '../src/jobs.ts';
 import { DEFAULT_LIMITS, find, live, type Limits } from '../src/manager.ts';
 import type { Handle, Runner, RunnerEvent } from '../src/runner.ts';
-import type { Job, Ledger, Report } from '../src/schema.ts';
+import { checkLedger, type Job, type Ledger, type Report } from '../src/schema.ts';
 
 const NOW = 1_700_000_000_000;
 const ask = (over: Record<string, unknown> = {}) => ({
@@ -273,7 +273,7 @@ test('a child that cannot acknowledge stop keeps its slot reserved', async () =>
   await jobs.close('done');
 });
 
-test('a full session budget purges finished, delivered jobs instead of refusing new work', async () => {
+test('a full session budget retains delivered reports while admitting new work', async () => {
   const limits: Limits = { ...DEFAULT_LIMITS, jobs: 3, concurrency: 3 };
   const { jobs, of } = jobsWith({ limits });
   const first = await accepted(jobs);
@@ -287,6 +287,38 @@ test('a full session budget purges finished, delivered jobs instead of refusing 
   assert.equal(refused.ok, false);
   assert.equal(jobs.drain().length, 2);
   const fourth = await accepted(jobs);
-  assert.deepEqual(jobs.ledger().jobs.map(job => job.id), [third.id, fourth.id]);
-  assert.deepEqual(jobs.purge(), [], 'nothing finished is left to purge');
+  assert.deepEqual(jobs.ledger().jobs.map(job => job.id), [first.id, second.id, third.id, fourth.id]);
+  assert.deepEqual(find(jobs.ledger(), first.id)?.report, good());
+  assert.deepEqual(jobs.purge().map(job => job.id), [first.id, second.id], 'purging requires an explicit request');
+  await jobs.close('done');
+});
+
+test('a long session persists and restores more than 256 completed jobs without losing evidence', async () => {
+  const limits: Limits = { ...DEFAULT_LIMITS, jobs: 1, concurrency: 1 };
+  const before = jobsWith({ limits });
+  const ids: string[] = [];
+  for (const index of Array.from({ length: 260 }, (_, index) => index)) {
+    const job = await accepted(before.jobs, { key: `history-${index}` });
+    ids.push(job.id);
+    before.of(job).emit({ type: 'settled', report: { ...good(), summary: `Evidence ${index}` } });
+    await new Promise(resolve => setImmediate(resolve));
+    before.jobs.acknowledge([job.id]);
+  }
+  const saved: Ledger = structuredClone(before.saved.at(-1)!);
+  assert.equal(saved.jobs.length, 260);
+  assert.equal(checkLedger(saved), true, 'the extension accepts its own persisted history');
+  const after = jobsWith({ limits });
+  await after.jobs.restore(saved);
+  assert.deepEqual(after.jobs.ledger().jobs.map(job => job.id), ids);
+  assert.equal(find(after.jobs.ledger(), ids[0]!)?.report?.summary, 'Evidence 0');
+  assert.equal(find(after.jobs.ledger(), ids[259]!)?.report?.summary, 'Evidence 259');
+  assert.deepEqual(after.jobs.pending(), [], 'acknowledged evidence is not delivered twice');
+  assert.equal(after.runs.size, 0, 'restoring completed history starts no children');
+  const retry = await after.jobs.delegate(ask({ key: 'history-0' }));
+  assert.ok(retry.ok && retry.repeated, 'the original call remains idempotent after reload');
+  const next = await accepted(after.jobs, { key: 'history-next' });
+  assert.equal(after.jobs.ledger().jobs.length, 261);
+  assert.equal(after.runs.size, 1);
+  assert.equal(find(after.jobs.ledger(), next.id)?.state, 'starting');
+  await after.jobs.close('done');
 });

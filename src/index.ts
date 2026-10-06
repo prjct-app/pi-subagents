@@ -927,7 +927,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       if (word === 'purge') {
         const gone = state.jobs?.purge() ?? [];
         context.ui.notify(gone.length
-          ? `Purged ${gone.length} finished job${gone.length === 1 ? '' : 's'}; ${state.jobs?.ledger().jobs.length ?? 0} of ${state.settings.limits.jobs} in use.`
+          ? `Purged ${gone.length} finished job${gone.length === 1 ? '' : 's'}; ${state.jobs?.ledger().jobs.length ?? 0} retained.`
           : 'Nothing to purge: every job left is running, undelivered, or unresolved.', 'info');
         return;
       }

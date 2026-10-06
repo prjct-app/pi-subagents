@@ -1,8 +1,12 @@
-## 0.5.0 (2026-10-06)
+## 0.5.2 (2026-10-06)
+
+- Stop the runner coordinator from automatically purging delivered jobs during admission. Retain evidence and call deduplication across reloads, including sessions with more than 256 completed jobs.
 
 ## 0.5.1 (2026-10-06)
 
-- Forward sibling messages for the entire child lifetime, retry rejected delivery, wake idle process children, preserve complete report evidence, and allow continued delegation without purging completed history.
+- Forward sibling messages for the entire child lifetime, retry rejected delivery, wake idle process children, preserve complete report evidence, and exclude delivered/resolved jobs from the admission budget. Version 0.5.2 also removes the coordinator's automatic purge and the reload history cap.
+
+## 0.5.0 (2026-10-06)
 
 - Remove the classifier client, tool, credentials, and classifier-based routing.
 - Preserve task language and constraints; workers and reviewers verify through the Pi SDK with inherited model/reasoning.

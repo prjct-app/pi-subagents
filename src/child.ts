@@ -13,6 +13,7 @@ import { connectJev, type ConnectJev, type Jev } from './jev.ts';
 import { childBashAllowed } from './config.ts';
 import { post, recent } from './wire.ts';
 import { ENGLISH_RULE, repairToolArgs } from '@prjct.app/pi-tui-kit';
+import { maskSensitiveData, protectOutboundData } from '@prjct.app/pi-secrets/privacy';
 
 /**
  * The only extension a child loads.
@@ -49,6 +50,14 @@ export function installGuard(
 ): boolean {
   repairToolArgs(pi, { subagent_report: { truncate: true }, subagent_send: { truncate: true }, subagent_ask: { truncate: true } });
   if (env.PI_SUBAGENTS_CHILD !== '1') return false;
+  // Isolated children do not load ambient extensions. Protect their own model
+  // requests too, including new sensitive data read by their tools.
+  const protect = async <T>(value: T, ctx: { abort(): void }): Promise<T> => {
+    try { return await protectOutboundData(value, env.PRJCT_HOME ? { root: join(env.PRJCT_HOME, 'pi-secrets') } : {}); }
+    catch { ctx.abort(); return maskSensitiveData(value); }
+  };
+  pi.on('context', async (event, ctx) => ({ messages: await protect(event.messages, ctx) }));
+  pi.on('before_provider_request', async (event, ctx) => protect(event.payload, ctx));
   const askParent = (payload: string, ctx: any): Promise<string | undefined> => request ? request(payload) : ctx?.ui?.input?.(`${ASK_PREFIX}${payload}`, undefined, { timeout: ASK_MS });
   const mayDelegate = env.PI_SUBAGENTS_CAN_DELEGATE === '1';
 

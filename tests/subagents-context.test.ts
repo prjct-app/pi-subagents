@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  MAX_CHOICES, childPrompt, choiceHint, eligible, findChoice, modelKey, neutralCatalogue, resolveWorkDir, roleBrief,
+  childPrompt, choiceHint, eligible, findChoice, modelKey, neutralCatalogue, resolveWorkDir, roleBrief,
 } from '../src/context.ts';
 import { REPORT_TOOL } from '../src/schema.ts';
 
@@ -14,11 +14,11 @@ const CATALOGUE = [
   model('openai-codex', 'gpt-5.6-luna', 1.25, 10),
 ];
 
-test('the list a parent chooses from is the session’s, cheapest first', () => {
+test('the list preserves the session catalogue without ranking capability by price', () => {
   const choices = eligible({ available: CATALOGUE });
   assert.deepEqual(choices.map(choice => choice.key),
-    ['openai-codex/gpt-5.4-mini', 'openai-codex/gpt-5.6-luna', 'anthropic/claude-opus-4-5']);
-  assert.equal(choices[0].in, 0.25);
+    ['anthropic/claude-opus-4-5', 'openai-codex/gpt-5.4-mini', 'openai-codex/gpt-5.6-luna']);
+  assert.equal(choices[0].in, 5);
   assert.equal(findChoice(choices, modelKey('anthropic', 'claude-opus-4-5'))?.label, 'claude-opus-4-5');
   assert.equal(findChoice(choices, 'anthropic/nothing-like-it'), undefined,
     'a model outside the list is not a model, whatever asked for it');
@@ -33,19 +33,18 @@ test('a scoped session scopes its children too', () => {
     'an empty scope is the host saying “everything”, not “nothing”');
 });
 
-test('the list is deduplicated and bounded, whatever the catalogue does', () => {
+test('all authorized models remain selectable even beyond sixteen cheap models', () => {
   const many = Array.from({ length: 40 }, (_, index) => model('p', `m${index}`, index, index));
   const choices = eligible({ available: [...many, ...many] });
-  assert.equal(choices.length, MAX_CHOICES);
-  assert.equal(new Set(choices.map(choice => choice.key)).size, MAX_CHOICES);
-  // The cap keeps the cheap end, which is the end a parent should reach for.
-  assert.equal(choices.at(-1)?.key, `p/m${MAX_CHOICES - 1}`);
+  assert.equal(choices.length, 40);
+  assert.equal(new Set(choices.map(choice => choice.key)).size, 40);
+  assert.ok(choices.some(choice => choice.key === 'p/m39'));
 });
 
-test('the hint prices the two ends, because the middle is in the list already', () => {
+test('the hint inherits capability and never equates price with intelligence', () => {
   const hint = choiceHint(eligible({ available: CATALOGUE }));
-  assert.match(hint, /Cheapest openai-codex\/gpt-5\.4-mini \(\$0\.25\/\$2 per Mtok\)/);
-  assert.match(hint, /most capable anthropic\/claude-opus-4-5 \(\$5\/\$25 per Mtok\)/);
+  assert.match(hint, /inherit this session's model and reasoning level/);
+  assert.doesNotMatch(hint, /Cheapest|most capable/);
   assert.match(choiceHint([]), /no model to offer/, 'and it says so rather than offering nothing');
 });
 

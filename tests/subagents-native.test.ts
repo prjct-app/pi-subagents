@@ -18,6 +18,27 @@ const until = async (ready: () => boolean) => {
   const deadline = Date.now() + 15000;
   while (!ready()) { assert.ok(Date.now() < deadline, 'native runner timed out'); await new Promise(resolve => setTimeout(resolve, 20)); }
 };
+
+test('native SDK workers and reviewers execute their own verification commands', { timeout: 30000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'agents-native-bash-'));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = directory;
+  const handles: Handle[] = [];
+  t.after(async () => {
+    for (const handle of handles) await handle.stop('test over');
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+  for (const role of ['worker', 'reviewer'] as const) {
+    const events: RunnerEvent[] = [];
+    const runner = inProcessRunner({ guardPath: join(root, 'src', 'child.ts'), extensionPaths: [fixture] });
+    handles.push(await runner(job(directory, { role, tools: ['read', 'bash'], task: 'fixture-bash' }), event => events.push(event)));
+    await until(() => events.some(event => event.type === 'settled' || event.type === 'failed'));
+    const settled = events.find(event => event.type === 'settled') as Extract<RunnerEvent, { type: 'settled' }>;
+    assert.ok(settled, JSON.stringify(events));
+    assert.deepEqual((settled.report as { checks: unknown }).checks, [{ command: 'printf SDK_BASH_OK', passed: true }]);
+  }
+});
 for (const backend of ['process', 'in-process'] as const) {
   test(`${backend}: actual Pi reports with an offline provider and retained conversation`, { timeout: 30000 }, async t => {
     const directory = await mkdtemp(join(tmpdir(), 'agents-native-'));
@@ -40,6 +61,12 @@ for (const backend of ['process', 'in-process'] as const) {
     assert.ok(session.file.startsWith(directory));
     await handles[0].stop('completed');
     assert.match(await readFile(session.file, 'utf8'), /subagent_report/);
+    const reasoningEvents: RunnerEvent[] = [];
+    handles.push(await runner(job(directory, { task: 'fixture-thinking', thinkingLevel: 'high' }), event => reasoningEvents.push(event)));
+    await until(() => reasoningEvents.some(event => event.type === 'settled' || event.type === 'failed'));
+    const reasoning = reasoningEvents.find(event => event.type === 'settled') as Extract<RunnerEvent, { type: 'settled' }>;
+    assert.ok(reasoning, JSON.stringify(reasoningEvents));
+    assert.deepEqual((reasoning.report as { checks: unknown }).checks, [{ command: 'SDK reasoning level', passed: true }]);
     const continuationEvents: RunnerEvent[] = [];
     handles.push(await runner(job(directory, { resumeSession: session.file, resumedFrom: child.id, task: 'Continue with a new report.' }), event => continuationEvents.push(event)));
     await until(() => continuationEvents.some(event => event.type === 'settled' || event.type === 'failed'));

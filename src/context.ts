@@ -38,15 +38,6 @@ export type ModelLike = {
 export const modelKey = (provider: string, modelId: string): string => `${provider}/${modelId}`;
 
 /**
- * How many choices a parent is offered.
- *
- * The list travels in the delegation tool's schema, which is paid on every turn
- * of the parent session, so it is capped and ordered cheapest first: the models
- * a parent should reach for by default are the ones it sees first.
- */
-export const MAX_CHOICES = 16;
-
-/**
  * The closed list of models a job may run on.
  *
  * A parent chooses from this and nothing else. `scoped` is what the session was
@@ -70,39 +61,25 @@ export function eligible(input: { available: readonly ModelLike[]; scoped?: read
       reasoning: model.reasoning === true,
     }))
     .filter(choice => (seen.has(choice.key) ? false : (seen.add(choice.key), true)))
-    .sort((a, b) => (a.in + a.out) - (b.in + b.out) || a.key.localeCompare(b.key))
-    .slice(0, MAX_CHOICES);
+    .sort((a, b) => a.key.localeCompare(b.key));
 }
 
 export const findChoice = (choices: readonly ModelChoice[], key: string): ModelChoice | undefined =>
   choices.find(choice => choice.key === key);
 
-const money = (rate: number): string => (rate >= 10 ? `$${Math.round(rate)}` : `$${rate}`);
-
-/**
- * The one line of pricing a parent needs to choose by complexity.
- *
- * The whole priced catalogue would be a table paid on every turn for a decision
- * taken rarely, so this names the extremes and leaves the middle to the list in
- * the schema.
- */
+/** A compact capability hint; the full catalogue is requested only when needed. */
 export function choiceHint(choices: readonly ModelChoice[]): string {
-  const cheapest = choices.at(0);
-  const strongest = choices.at(-1);
-  if (!cheapest || !strongest) return 'This session has no model to offer a job, so delegation is unavailable.';
-  if (cheapest.key === strongest.key) return `Only ${cheapest.key} is available.`;
-  const rate = (choice: ModelChoice) => `${money(choice.in)}/${money(choice.out)} per Mtok`;
-  return `Cheapest ${cheapest.key} (${rate(cheapest)}), most capable ${strongest.key} (${rate(strongest)}). `
-    + 'Match the model to the task: reading and mapping rarely needs the expensive one. Omit it to reuse this session’s.';
+  if (!choices.length) return 'This session has no model to offer a job, so delegation is unavailable.';
+  if (choices.length === 1) return `Only ${choices[0]!.key} is available.`;
+  return `${choices.length} models are available. Omit model to inherit this session's model and reasoning level. `
+    + 'Choose another model when the task calls for its capabilities; price alone does not establish capability.';
 }
 
 /**
  * The catalogue a child chooses from: facts, one line each, alphabetical.
  *
- * Neutrality is the point. The parent's hint orders cheapest-first because the
- * parent is paying; the child is working, and a recommendation it never asked
- * for is a bias it cannot see past. It gets what each model costs and carries,
- * and it decides.
+ * Cost and context size are facts, not a capability ranking. The child gets
+ * the complete authorized catalogue and decides whether a switch helps.
  */
 export function neutralCatalogue(choices: readonly ModelChoice[]): string {
   if (choices.length === 0) return 'This machine reports no models to switch to.';

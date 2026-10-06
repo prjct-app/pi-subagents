@@ -98,6 +98,7 @@ export function inProcessRunner(options: Options): Runner {
       const model = session.modelRuntime.getModel(job.provider, job.modelId);
       if (!model) throw new Error(`Child model ${job.provider}/${job.modelId} unavailable; configure its extension package explicitly.`);
       await session.setModel(model);
+      if (job.thinkingLevel) session.setThinkingLevel(job.thinkingLevel);
       const missing = tools.filter(tool => !session.getAllTools().some(available => available.name === tool));
       if (missing.length) throw new Error(`Child capabilities unavailable: ${missing.join(', ')}`);
       session.setActiveToolsByName(tools);

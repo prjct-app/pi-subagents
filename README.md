@@ -11,8 +11,12 @@ pi install npm:@prjct.app/pi-subagents
 
 Tested with Pi **0.85.1–0.85.x**; requires Node **22.19+**.
 Host libraries use wildcard peers as required by Pi packaging. Compatibility
-with other Pi releases has not been verified. The default runner launches a
-child Pi process for each active job; a native in-process runner is opt-in.
+with other Pi releases has not been verified. The default runner creates native
+sessions through Pi's SDK. A separate Pi process is available as an explicit option.
+
+Delegated jobs inherit the parent model and reasoning level, including nested
+jobs and continuations. The complete authorized model catalogue remains available;
+models are not excluded or ranked by price as a proxy for intelligence.
 
 ## Turn subagents on and off
 
@@ -97,23 +101,13 @@ files. The resulting `changes.patch` must be reviewed and applied separately.
   the files and sends them to [Jev](https://typesafe.ai); the model gets the answer and its
   probability, never the file. `.env`, key files, binaries and directories are not sent.
 
-## Jev
+## Optional classifier tool
 
-With a TypeSafe key (`TYPESAFE_API_KEY`, or the OS keyring entry pi-qa and pi-memory
-share), two things use Jev. Neither blocks the agent or waits in front of a turn, and
-without a key both behave exactly as they did before:
-
-- **`ask_jev`** is in the prompt only when a key is found.
-- **Auto-delegation** asks Jev whether the prompt is complex before any model writes a plan.
-  Below 0.6 the triage ends there, with no generative call. An error or a timeout
-  falls back to the model triage.
-
-Jev never picks a model. A job with no model named runs on the session's own model.
-
-Jobs return immediately; results arrive in the parent session. Delivery failures
-are retried, including while idle, and receipt IDs prevent duplicate delivery on
-normal session restoration. Pi does not provide transactional send-and-ack, so a
-crash between acceptance and persistence can still cause a duplicate notification.
+`ask_jev` is available when a TypeSafe key is configured. The active model can
+request a second opinion explicitly. Jev does not veto delegation, route models,
+or rewrite tasks. Explicit automatic triage uses the parent model and reasoning
+through the Pi SDK. Delegation, steering, and resumes preserve the original text,
+including non-English instructions and exact constraints.
 
 ## Roles and capabilities
 
@@ -150,7 +144,7 @@ the parent session starts again.
 
 ```json
 {
-  "runner": "process",
+  "runner": "in-process",
   "retentionDays": 7,
   "workspaceRetentionHours": 24,
   "artifactPolicy": "requested",
@@ -182,11 +176,11 @@ default or `none` to disable product-documentation artifacts.
 directories; nothing is downloaded automatically. Read-only roles do not gain
 arbitrary extension tools by enabling a package.
 
-Set `runner` to **`in-process`** to use native Pi sessions. The same lifecycle,
+The default **`in-process`** runner uses native Pi SDK sessions. The same lifecycle,
 reports, role restrictions and retention apply. This mode shares the host process:
 uncooperative extension code can affect Pi itself. A child that does not acknowledge
-cancellation keeps its capacity reserved. Process execution remains the default;
-there is no automatic switch between runners.
+cancellation keeps its capacity reserved. Set `runner` to **`process`** when process
+isolation is required; there is no automatic switch between runners.
 
 Environment variables remain supported:
 

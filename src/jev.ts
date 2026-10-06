@@ -21,6 +21,7 @@ const TIMEOUT_MS = 8_000;
 
 /** The one TypeSafe key every prjct extension shares: TYPESAFE_API_KEY, then the OS keyring. */
 export const connectJev: ConnectJev = async () => {
+  if (process.env.PI_SUBAGENTS_OFFLINE === '1') return undefined;
   try {
     const { AsyncEntry } = await import('@napi-rs/keyring');
     const resolved = await resolveKey(keyringStoreFromEntries(new AsyncEntry(KEYRING_SERVICE, KEYRING_ACCOUNT)));

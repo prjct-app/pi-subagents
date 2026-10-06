@@ -54,6 +54,7 @@ function host(options: { models?: any[]; scoped?: any[]; complete?: (system: str
     cwd: options.cwd ?? '/work',
     hasUI: true,
     model: available.at(-1),
+    thinkingLevel: 'high',
     modelRegistry: { getAvailable: () => available },
     scopedModels: (options.scoped ?? []).map(value => ({ model: value })),
     isIdle: () => session.idle,
@@ -116,7 +117,7 @@ test('delegating starts a child and says plainly not to wait for it', async () =
   assert.equal(h.ledger().jobs.length, 1, 'and the ledger reaches the session file');
 });
 
-test('a child always receives its instructions in English, whatever language the parent wrote', async () => {
+test('delegation and steering preserve the original instructions without an intermediary rewrite', async () => {
   const asked: string[] = [];
   const h = host({ complete: async (_system: string, user: string) => { asked.push(user); return 'Read src/importer.ts. Report why rows with a BOM are dropped.'; } });
   await h.emit('session_start', { reason: 'resume' });
@@ -124,10 +125,10 @@ test('a child always receives its instructions in English, whatever language the
   assert.equal(english.task, 'Read src/importer.ts.');
   assert.equal(asked.length, 0, 'English costs no call');
   const spanish = (await h.delegate({ task: 'Lee src/importer.ts y dime por qué se pierden las filas con BOM' })).details as Job;
-  assert.equal(spanish.task, 'Read src/importer.ts. Report why rows with a BOM are dropped.');
-  assert.deepEqual(asked, ['Lee src/importer.ts y dime por qué se pierden las filas con BOM']);
+  assert.equal(spanish.task, 'Lee src/importer.ts y dime por qué se pierden las filas con BOM');
+  assert.deepEqual(asked, []);
   await h.tools.get('agent_jobs').execute('s', { action: 'steer', jobId: spanish.id, message: 'Revisa también el parser y dime que falla' });
-  assert.equal(h.of(spanish).steers.at(-1), 'Read src/importer.ts. Report why rows with a BOM are dropped.', 'steers are rewritten too');
+  assert.equal(h.of(spanish).steers.at(-1), 'Revisa también el parser y dime que falla', 'steering preserves exact constraints');
 });
 
 test('agent_delegate has one required selector and tolerates calls from the old two-field schema', async () => {
@@ -270,6 +271,7 @@ test('the model is this session’s unless one from its own list is asked for', 
 
   const cheap = await h.delegate({ model: 'openai-codex/gpt-5.4-mini' });
   assert.equal(cheap.details.modelId, 'gpt-5.4-mini', 'a job can be given a smaller model than the parent');
+  assert.equal(cheap.details.thinkingLevel, 'high', 'an explicit model keeps the parent reasoning setting');
   const bare = await h.delegate({ model: 'gpt-5.4-mini' }, 'call_bare');
   assert.equal(bare.details.provider, 'openai-codex', 'named without its provider, if that is unambiguous');
 
@@ -599,7 +601,7 @@ test('a shutdown mid-triage admits no child into a session that is leaving', asy
   assert.equal(h.runs.size, 0, 'no orphan: the closed flag stopped the admission');
 });
 
-test('Jev answers the triage first: not complex ends it with no model call; no answer keeps the old path', async (t) => {
+test('Jev cannot veto the session model when automatic triage is explicitly enabled', async (t) => {
   const auto = process.env.PI_AGENTS_AUTO;
   t.after(() => { if (auto === undefined) delete process.env.PI_AGENTS_AUTO; else process.env.PI_AGENTS_AUTO = auto; });
   process.env.PI_AGENTS_AUTO = '1';
@@ -619,7 +621,7 @@ test('Jev answers the triage first: not complex ends it with no model call; no a
     for (const _ of [1, 2, 3, 4]) await settleTick();
     return { calls: calls.value, runs: h.runs.size };
   };
-  assert.deepEqual(await run(async () => 0.2), { calls: 0, runs: 0 }, 'not complex: no plan is written');
+  assert.deepEqual(await run(async () => 0.2), { calls: 1, runs: 1 }, 'a classifier false negative cannot veto the model');
   assert.deepEqual(await run(async () => 0.9), { calls: 1, runs: 1 }, 'complex: the model writes the subtasks');
   assert.deepEqual(await run(async () => { throw new Error('timeout'); }), { calls: 1, runs: 1 }, 'a failed answer changes nothing');
 });

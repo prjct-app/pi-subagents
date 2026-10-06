@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { StringEnum } from '@earendil-works/pi-ai';
 import { Type } from 'typebox';
 import { Compile } from 'typebox/compile';
@@ -225,6 +226,8 @@ export type Report = {
 export type Usage = { tokens?: number; cost?: number; calls?: number };
 
 export type Job = {
+  /** Preserve the delegating session's reasoning setting through both SDK and process runners. */
+  thinkingLevel?: ExtensionContext['thinkingLevel'];
   continuedBy?: string;
   resumedFrom?: string;
   resumeSession?: string;
@@ -282,6 +285,7 @@ export type Job = {
 type moment_ = number;
 
 export const JobSchema = Type.Object({
+  thinkingLevel: Type.Optional(enumOf('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')),
   continuedBy: Type.Optional(id),
   resumedFrom: Type.Optional(id),
   resumeSession: Type.Optional(Type.String({ maxLength: 4096 })),

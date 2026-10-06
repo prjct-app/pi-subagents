@@ -5,7 +5,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai/compat'
 export default function fixtureProvider(pi: ExtensionAPI): void {
   pi.registerProvider('subagents-fixture', {
     baseUrl: 'http://127.0.0.1:1', apiKey: 'fixture-only', api: 'openai-completions',
-    models: [{ id: 'offline', name: 'Offline fixture', reasoning: false, input: ['text'], contextWindow: 32000, maxTokens: 1024,
+    models: [{ id: 'offline', name: 'Offline fixture', reasoning: true, input: ['text'], contextWindow: 32000, maxTokens: 1024,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
     streamSimple(model, context, options) {
       const stream = createAssistantMessageEventStream();
@@ -24,8 +24,14 @@ export default function fixtureProvider(pi: ExtensionAPI): void {
           message.content = [{ type: 'toolCall', id: 'fixture-delegate', name: 'subagent_delegate', arguments: { agent: 'explorer', subject: 'Read contracts', task: 'Inspect the contract.' } }];
           stream.push({ type: 'done', reason: 'toolUse', message }); stream.end(); return;
         }
+        if (text.includes('fixture-bash') && previous?.toolName !== 'bash') {
+          message.content = [{ type: 'toolCall', id: 'fixture-bash', name: 'bash', arguments: { command: 'printf SDK_BASH_OK' } }];
+          stream.push({ type: 'done', reason: 'toolUse', message }); stream.end(); return;
+        }
         message.content = [{ type: 'toolCall', id: 'fixture-report', name: 'subagent_report', arguments: {
           outcome: 'completed', summary: 'Offline SDK execution succeeded.', criteria: [{ criterion: 'Uses only authorized tools', met: 'yes', evidence: (context.tools ?? []).map(tool => tool.name).join(', ') }], findings: [], blockers: [],
+          ...(text.includes('fixture-bash') ? { checks: [{ command: 'printf SDK_BASH_OK', passed: !previous?.isError && JSON.stringify(previous?.content).includes('SDK_BASH_OK') }] } : {}),
+          ...(text.includes('fixture-thinking') ? { checks: [{ command: 'SDK reasoning level', passed: options?.reasoning === 'high' }] } : {}),
         } }];
         stream.push({ type: 'start', partial: message });
         stream.push({ type: 'done', reason: 'toolUse', message }); stream.end();

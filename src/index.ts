@@ -18,8 +18,6 @@ import { childMemory, getActiveRoot, registerHandle } from './host.ts';
 import { plain } from './text.ts';
 import { openAgentsPanel } from './panel.ts';
 import { AUTO_MAX, TRIAGE_SYSTEM, parseTriage, worthTriaging } from './auto.ts';
-import { ASK_JEV_DESCRIPTION, ASK_JEV_TOOL, AskJevSchema, headline, kindOf, runAskJev } from './ask-jev.ts';
-import { connectJev, type ConnectJev, type Jev } from './jev.ts';
 import { selectSpecificationTopics } from './checklist.ts';
 import { FACTORY_AGENTS, factoryAgent, factoryCatalogue, type FactoryAgent } from './factory.ts';
 import { cleanupExternalWorkspaces, createExternalWorkspace, discardExternalWorkspace, finalizeExternalWorkspace, type ExternalWorkspace } from './workspace.ts';
@@ -63,8 +61,6 @@ export type JobsOptions = {
   makeRunner?: typeof spawnRunner;
   /** Injected by the tests; the default uses the parent session's model and reasoning. */
   complete?: (system: string, user: string, ctx: ExtensionContext) => Promise<string>;
-  /** Injected by the tests; the real one reads the shared TypeSafe key. */
-  jev?: ConnectJev;
   /** Injected by the tests; the real one lives beside the agent directory. */
   wireRoot?: string;
   /** External factory workspaces. Defaults to ~/.prjct/subagents/workspaces. */
@@ -165,19 +161,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     auto: { enabled: autoFromEnv(), inFlight: false },
     /** Set on shutdown: nothing admits a child into a session that is leaving. */
     closed: false,
-    /** Jev, once per process; undefined inside means no key, and everything runs as before. */
-    jev: undefined as Promise<Jev | undefined> | undefined,
-    /** Set once the key lookup has settled, so a turn never waits on it. */
-    jevKnown: undefined as { jev: Jev | undefined } | undefined,
-  };
-
-  /** ask_jev stays out of the prompt entirely when there is no key to answer it. */
-  const applyJev = (): void => {
-    if (!state.jevKnown || state.jevKnown.jev) return;
-    try {
-      const active = pi.getActiveTools();
-      if (active.includes(ASK_JEV_TOOL)) pi.setActiveTools(active.filter(name => name !== ASK_JEV_TOOL));
-    } catch { /* not initialized yet: session_start applies it */ }
   };
 
   /**
@@ -241,7 +224,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   const factoryTools = (profile: FactoryAgent | undefined, role: Role, available = inheritedTools(role)): string[] => {
     if (!profile) return available;
-    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', ASK_JEV_TOOL];
+    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash'];
     return available.filter(tool => safe.includes(tool) && (role === 'worker' || READ_ONLY_ABILITIES.includes(tool)
       || (tool === 'bash' && BASH_ROLES.includes(role))));
   };
@@ -290,9 +273,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       : '';
 
   /*
-   * A job with no model named runs on the session's own model. Jev used to rate
-   * the task and pick the cheapest session model for "reading"; 11 of 11 such
-   * jobs failed on MiniMax-M3 (2026-10-01 to 10-03), so routing is gone.
+   * A job inherits the session's selected model and reasoning level.
    */
 
   /** Deliver what finished, once, at a point the session can take a message. */
@@ -417,7 +398,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   /** Explicit automatic triage uses the same intelligence as the parent session. */
   const complete = options.complete ?? (async (system: string, user: string, context: ExtensionContext): Promise<string> => {
     if (!context.model) return '';
-    const registry = context.modelRegistry as typeof context.modelRegistry & Partial<Pick<ModelRuntime, 'streamSimple'>>;
+    const registry = context.modelRegistry as Partial<Pick<ModelRuntime, 'streamSimple'>>;
     const runtime = registry.streamSimple ? undefined : await ModelRuntime.create({ allowModelNetwork: false });
     const model = registry.streamSimple ? context.model : runtime!.getModel(context.model.provider, context.model.id);
     if (!model) return '';
@@ -588,8 +569,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       name: 'agent_delegate',
       label: 'Delegate a job',
       description: 'Start one separable job on a factory profile or a base role (agent). Factory implementers and documenters write only in external snapshots; '
-        + 'documentation needs an explicit user request. Explorer and reviewer are read-only. The job reports evidence and ends; do not wait for it. '
-        + `${ENGLISH_RULE} Factory agents:\n${factoryCatalogue()}\n${hint}`,
+        + 'documentation needs an explicit user request. Explorers use read-only file tools; reviewers can run verification commands. The job reports evidence and ends; do not wait for it. '
+        + `Preserve the original task language, quotes and constraints. Factory agents:\n${factoryCatalogue()}\n${hint}`,
       parameters: Type.Object({
         agent: StringEnum(DELEGATE_AGENTS, {
           description: 'The one delegation selector: a factory profile or a base role such as reviewer. Never send a separate role field.',
@@ -664,7 +645,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   // (plan mode does). Re-check before every turn, and refuse the call anyway.
   pi.on('before_agent_start', (_event: any, context: ExtensionContext) => {
     applyDelegation(context);
-    applyJev();
     return undefined;
   });
   pi.on('tool_call', (event: any) => {
@@ -814,32 +794,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     },
   } as Parameters<ExtensionAPI['registerTool']>[0]);
 
-  pi.registerTool({
-    name: ASK_JEV_TOOL,
-    label: 'Ask Jev',
-    description: ASK_JEV_DESCRIPTION,
-    parameters: AskJevSchema,
-    async execute(_toolCallId: string, input: any, signal?: AbortSignal) {
-      const result = await runAskJev(async () => state.jev, input, ctx().cwd, signal);
-      return { content: [{ type: 'text' as const, text: JSON.stringify(result) }], details: { input, result } };
-    },
-    renderShell: 'self',
-    renderCall(args: any, theme: any, context: any) {
-      if (context?.isPartial === false) return new Container();
-      return row(theme, { symbol: SYMBOL.active, tone: 'accent', verb: 'JEV', target: plain(String(args?.question ?? '')), meta: 'asking…' });
-    },
-    renderResult(result: any, _options: unknown, theme: any) {
-      const details = result?.details as { input?: any; result?: Record<string, unknown> } | undefined;
-      const paths = details?.input?.paths?.length ?? 0;
-      const target = `${plain(String(details?.input?.question ?? ''))}${paths ? ` · ${paths} file${paths === 1 ? '' : 's'}` : ''}`;
-      if (!details?.result) {
-        const first = result?.content?.[0];
-        return row(theme, { symbol: SYMBOL.error, tone: 'error', verb: 'JEV', target, meta: first?.type === 'text' ? plain(first.text).slice(0, 120) : 'failed' });
-      }
-      return row(theme, { symbol: SYMBOL.ok, tone: 'success', verb: 'JEV', target, meta: `${kindOf(details.input).replace('_', '/')} · ${headline(details.result)}` });
-    },
-  } as Parameters<ExtensionAPI['registerTool']>[0]);
-
   /**
    * Auto-delegation never delays the prompt it watches: the handler returns
    * immediately and the triage runs beside the turn it started.
@@ -894,13 +848,6 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     state.choices = choices(context);
     registerDelegate(choiceHint(state.choices));
     applyDelegation(context);
-    // The keyring is read once, beside the session start, never in front of it.
-    state.jev ??= (options.jev ?? connectJev)().then(jev => {
-      state.jevKnown = { jev };
-      applyJev();
-      return jev;
-    });
-    applyJev();
     const jobs = build(context.sessionManager.getSessionId());
     state.jobs = jobs;
     // Only this session's own ledger, never a fork's copy of one: a fork would

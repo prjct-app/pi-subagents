@@ -19,7 +19,7 @@ export function loadSettings(cwd: string, home = agentHome(), warn: (text: strin
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Expected an object');
       const next = { ...settings, limits: { ...settings.limits } };
       for (const [key, value] of Object.entries(raw)) {
-        // Retired 2026-10-03 with Jev's model routing; old files still load quietly.
+        // Retired 2026-10-03 with automatic model routing; old files still load quietly.
         if (key === 'routeModels') continue;
         if (key === 'runner' && (value === 'process' || value === 'in-process')) next.runner = value;
         else if (key === 'retentionDays' && Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 365) next.retentionDays = Number(value);

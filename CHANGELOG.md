@@ -1,3 +1,9 @@
+## 0.5.0 (2026-10-06)
+
+- Remove the classifier client, tool, credentials, and classifier-based routing.
+- Preserve task language and constraints; workers and reviewers verify through the Pi SDK with inherited model/reasoning.
+- Isolate all tests from personal credentials and block native keychain access.
+
 ## 0.4.2 (2026-10-06)
 
 - Protect direct SDK and optional Jev requests with the published pi-secrets outbound guard.

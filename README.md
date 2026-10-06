@@ -90,24 +90,16 @@ snapshot under `~/.prjct/subagents/workspaces/`; they never receive Bash or arbi
 mutation extensions. The snapshot includes tracked changes and non-ignored untracked
 files. The resulting `changes.patch` must be reviewed and applied separately.
 
-## Four tools
+## Three tools
 
 - **`agent_delegate`**: set `agent` to a base role or factory profile, plus `subject`, `task`, and optional `context`, `model`, `cwd`. `requestedByUser: true` is required for `product-documenter`.
 - **`agent_jobs`**: `action: status | result | cancel | steer | resume`, optional
   `jobId` and `message` (required for steer/resume). `result` returns the full report.
 - **`agent_reply`**: `name`, `answer`; answer a question escalated by a live child.
-- **`ask_jev`**: `question`, plus `paths` and/or `text`; `options` makes it a pick-one,
-  `levels` a score, neither a yes/no. `each: true` asks every path in parallel. Code reads
-  the files and sends them to [Jev](https://typesafe.ai); the model gets the answer and its
-  probability, never the file. `.env`, key files, binaries and directories are not sent.
 
-## Optional classifier tool
-
-`ask_jev` is available when a TypeSafe key is configured. The active model can
-request a second opinion explicitly. Jev does not veto delegation, route models,
-or rewrite tasks. Explicit automatic triage uses the parent model and reasoning
-through the Pi SDK. Delegation, steering, and resumes preserve the original text,
-including non-English instructions and exact constraints.
+Explicit automatic triage uses the parent model and reasoning through the Pi SDK.
+Delegation, steering, and resumes preserve the original text, including non-English
+instructions and exact constraints. The active model makes semantic decisions.
 
 ## Roles and capabilities
 

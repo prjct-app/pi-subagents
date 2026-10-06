@@ -93,7 +93,7 @@ export function neutralCatalogue(choices: readonly ModelChoice[]): string {
 const ROLE_BRIEF: Record<Role, string> = {
   worker: 'You implement the assigned task within your effective tools and working directory. Validate changes, report evidence and unresolved decisions. Do not expand scope.',
   explorer: 'You are an explorer. You map what is there — where things live, how they connect, '
-    + 'what is missing — and you report it plainly. You are not asked whether any of it is good.',
+    + 'what is missing — and you report it plainly. Report concrete risks or contradictions when the task calls for them.',
   reviewer: 'You are a reviewer. You read what is in front of you against criteria you derive '
     + 'yourself, and you report what holds, what does not, and what you could not check.',
 };
@@ -111,8 +111,6 @@ export const roleBrief = (role: Role): string => ROLE_BRIEF[role];
 /** The one line each well-known tool gets; anything else is named as given. */
 const TOOL_BLURB: Record<string, string> = {
   read: 'read — open a file under the working directory.',
-  ask_jev: 'ask_jev — ask a fast judgement model one question about many files at once and get the answer and '
-    + 'its probability, never the files. Use it to decide what is worth opening; read the file when you need the code itself.',
   grep: 'grep — search file contents under the working directory.',
   find: 'find — find files by name under the working directory.',
   ls: 'ls — list a directory under the working directory.',
@@ -149,7 +147,7 @@ export function childPrompt(input: {
     ...inherited.map(name => TOOL_BLURB[name] ?? `${name} — inherited from the session that asked.`),
     `${REPORT_TOOL} — return the report and end. This is the only way anything you learn leaves this process.`,
     `${MODEL_TOOL} — list the models this machine can run, or switch to one. You start on the model `
-      + 'the session that asked had; you are the one doing this work, so the choice is yours. Switching is instant.',
+      + 'the session that asked had; you are the one doing this work, so switch only when the assigned task explicitly authorizes a different model.',
     `${MEMORY_TOOL} — look up what this project remembers about something you found. Records, not conclusions.`,
     `${ASK_TOOL} — ask whoever asked for your work when a decision is not yours. The answer arrives `
       + 'by itself; never wait for it. Carry on, or report the question as a blocker.',
@@ -183,7 +181,7 @@ export function childPrompt(input: {
         : 'You do not have write, edit, or bash. Your file tools are read-only and stay under the working directory. '
           + 'You do not have any agent_* tool.',
     '',
-    'Work out the acceptance criteria yourself, from the task below, before you open anything. '
+    'Use the supplied acceptance criteria and inspect the relevant evidence before deriving additional checks. Label inferred requirements as inferred. '
     + 'Report every criterion as met, not met, or unknown, each with the evidence for it — file and '
     + 'line where there is one. Unknown is an honest answer; a criterion you could not check is '
     + 'never reported as met.',

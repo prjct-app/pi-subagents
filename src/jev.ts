@@ -1,3 +1,4 @@
+import { protectOutboundData } from '@prjct.app/pi-secrets/privacy';
 import { KEYRING_ACCOUNT, KEYRING_SERVICE, keyringStoreFromEntries, resolveKey, JEV_MODEL } from '@prjct.app/pi-tui-kit';
 import type { Questions } from '@typesafe-ai/sdk';
 
@@ -30,7 +31,7 @@ export const connectJev: ConnectJev = async () => {
     // One attempt: a decision that arrives late is worth less than the fallback.
     const client = new TypeSafeClient({ apiKey: resolved.key, defaultModel: JEV_MODEL, logLevel: 'off', timeout: TIMEOUT_MS, retry: { maxRetries: 0 } });
     return async (state, questions, signal) =>
-      (await client.systemOne({ state: state as never, questions }, { signal })).answers as unknown as Record<string, JevAnswer>;
+      (await client.systemOne(await protectOutboundData({ state: state as never, questions }), { signal })).answers as unknown as Record<string, JevAnswer>;
   } catch {
     return undefined;
   }

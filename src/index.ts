@@ -1,3 +1,4 @@
+import { protectOutboundData } from '@prjct.app/pi-secrets/privacy';
 import { BASH_ROLES, defaultSettings, loadSettings, roleTools, inheritedCapabilities, extensionPaths, agentHome } from './config.ts';
 import { cleanupStorage, storageRoot, sessionRoot, prepareSession, retainSettlement, resumable } from './storage.ts';
 import { inProcessRunner } from './in-process.ts';
@@ -420,10 +421,10 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const runtime = registry.streamSimple ? undefined : await ModelRuntime.create({ allowModelNetwork: false });
     const model = registry.streamSimple ? context.model : runtime!.getModel(context.model.provider, context.model.id);
     if (!model) return '';
-    const request = {
+    const request = await protectOutboundData({
       systemPrompt: system,
       messages: [{ role: 'user' as const, content: user, timestamp: Date.now() }],
-    };
+    });
     const settings = { reasoning: context.thinkingLevel === 'off' ? undefined : context.thinkingLevel ?? 'medium',
       maxTokens: Math.min(model.maxTokens, 8192), signal: AbortSignal.timeout(120_000) };
     const reply = registry.streamSimple ? await registry.streamSimple(model, request, settings).result()

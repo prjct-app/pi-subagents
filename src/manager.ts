@@ -89,8 +89,8 @@ export function resolve(ledger: Ledger, jobId: string, now: number): Ledger {
 export const find = (ledger: Ledger, jobId: string): Job | undefined => ledger.jobs.find(job => job.id === jobId);
 
 /**
- * Finished jobs whose report the parent already holds. Dropping them frees the
- * session budget and loses nothing the conversation does not already have.
+ * Finished jobs whose report the parent already holds. These do not consume
+ * admission capacity, and may be removed only by an explicit purge request.
  * Live jobs, undelivered reports and a job with anything still standing under
  * it or continuing it always stay. Unresolved blockers stay unless named.
  */

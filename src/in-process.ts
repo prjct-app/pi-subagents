@@ -2,6 +2,8 @@ import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsMana
 import { installGuard } from './child.ts';
 import { agentHome, roleTools } from './config.ts';
 import { activityOf } from './activity.ts';
+import type { AssistantMessage } from '@earendil-works/pi-ai';
+import { finalAnswer, missingAnswer } from './final-answer.ts';
 import { childPrompt, neutralCatalogue } from './context.ts';
 import { factoryAgent } from './factory.ts';
 import { rememberFor, taskMemory, within, type Runner, type RunnerEvent, type spawnRunner } from './runner.ts';
@@ -13,7 +15,7 @@ type Options = Parameters<typeof spawnRunner>[0];
 /** Native Pi sessions with explicit resources and per-session state; never mutates process.env or cwd. */
 export function inProcessRunner(options: Options): Runner {
   return async (job, emit) => {
-    const slot: { session?: AgentSession; done: boolean; stop?: Promise<void>; timer?: ReturnType<typeof setInterval>; nudged: boolean } = { done: false, nudged: false };
+    const slot: { session?: AgentSession; done: boolean; stop?: Promise<void>; timer?: ReturnType<typeof setInterval>; lastAssistant?: AssistantMessage } = { done: false };
     const mayDelegate = Boolean(options.onDelegate) && job.depth + 1 < (options.depth ?? 2);
     const wired = Boolean(options.wireRoot && job.wire);
     // Admission already removed ambient extension tools unless their packages
@@ -107,6 +109,7 @@ export function inProcessRunner(options: Options): Runner {
       session.subscribe(event => {
         if (slot.done) return;
         const raw = event as any;
+        if (raw.type === 'message_end' && raw.message?.role === 'assistant') slot.lastAssistant = raw.message;
         const activity = activityOf(raw);
         if (activity) emit({ type: 'activity', activity });
         if (raw.type === 'tool_execution_start' && raw.toolName === REPORT_TOOL) claims.set(raw.toolCallId, raw.args);
@@ -119,11 +122,12 @@ export function inProcessRunner(options: Options): Runner {
           terminal({ type: 'settled', report, usage: { tokens: Math.max(0, stats.tokens.total - baseline.tokens.total), cost: Math.max(0, stats.cost - baseline.cost), calls: Math.max(0, stats.toolCalls - baseline.toolCalls) } });
         }
         if (raw.type === 'agent_settled') {
-          if (slot.nudged) { terminal({ type: 'failed', reason: 'The child ended without reporting.' }); return; }
-          slot.nudged = true;
-          void steer(`You settled without calling ${REPORT_TOOL}. Call ${REPORT_TOOL} now with the evidence you have. Do not wait.`).then(ok => {
-            if (!ok && !slot.done) terminal({ type: 'failed', reason: 'The child ended without reporting.' });
-          });
+          const report = finalAnswer(slot.lastAssistant);
+          const stats = session.getSessionStats();
+          const usage = { tokens: Math.max(0, stats.tokens.total - baseline.tokens.total), cost: Math.max(0, stats.cost - baseline.cost), calls: Math.max(0, stats.toolCalls - baseline.toolCalls) };
+          if (!report) { terminal({ type: 'failed', reason: missingAnswer(slot.lastAssistant), usage }); return; }
+          emit({ type: 'report', report });
+          terminal({ type: 'settled', report, usage });
         }
       });
       if (file) emit({ type: 'session', file });

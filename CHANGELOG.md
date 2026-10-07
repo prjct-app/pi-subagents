@@ -1,3 +1,10 @@
+## 0.5.3 (2026-10-07)
+
+- Accept normal final answers in both public SDK runners without a formatting retry. Mark prose outcomes unassessed; retain provider errors, truncation, cancellation and SDK retry semantics.
+- Deliver every finished agent's complete evidence and final text to its parent independently of terminal preview limits.
+- Refuse unavailable or ambiguous explicit models instead of substituting another model. Preserve provider-independent model and reasoning inheritance.
+- Bound test concurrency and remove random-ID matches from the panel search fixture.
+
 ## 0.5.2 (2026-10-06)
 
 - Stop the runner coordinator from automatically purging delivered jobs during admission. Retain evidence and call deduplication across reloads, including sessions with more than 256 completed jobs.

@@ -15,6 +15,11 @@ export default function fixtureProvider(pi: ExtensionAPI): void {
       const wait = text.includes('fixture-wait');
       const finish = () => {
         if (wait) { message.stopReason = 'aborted'; stream.push({ type: 'error', reason: 'aborted', error: message }); stream.end(); return; }
+        if (text.includes('fixture-prose')) {
+          message.stopReason = 'stop';
+          message.content = [{ type: 'text', text: 'Encontré el problema.\nFalta validar producción; no afirmo que pase.\nFINAL_EVIDENCE' }];
+          stream.push({ type: 'done', reason: 'stop', message }); stream.end(); return;
+        }
         const previous = context.messages.at(-1) as any;
         if (previous?.role === 'toolResult' && previous.toolName === 'subagent_report') {
           message.stopReason = 'stop'; message.content = [{ type: 'text', text: 'Report delivered.' }];

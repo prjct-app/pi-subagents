@@ -220,7 +220,7 @@ export function makeJobs(session: string, wiring: Wiring): Jobs {
         deadlineNudges.add(key);
         const remaining = Math.max(1, Math.ceil((limits.timeoutMs - elapsed) / 1000));
         const message = stage === 'final'
-          ? `Deadline imminent: about ${remaining}s remain. Stop optional exploration now and call subagent_report with your best evidence. A partial report or explicit blocker is preferable to a timeout.`
+          ? `Deadline imminent: about ${remaining}s remain. Finish with your best evidence in a final answer or subagent_report. A partial report or explicit blocker is preferable to a timeout.`
           : `Time budget: about ${remaining}s remain. Narrow the scope to the requested outcome. If anything blocks completion, report the blocker instead of continuing optional exploration.`;
         const handle = handles.get(job.id);
         if (handle) await handle.then(value => value.steer?.(message), () => undefined).catch(() => undefined);

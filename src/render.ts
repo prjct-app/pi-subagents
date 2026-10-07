@@ -11,15 +11,13 @@ import type { Job, JobState, Ledger, Report } from './schema.ts';
  * report is text from a model running in another process, and a renderer is
  * never the thing that puts control codes on someone's screen.
  *
- * Both forms are bounded. The transcript form is free but unreadable past a
- * few lines; the delivered form is paid on every later turn, so it carries the
- * evidence and drops the prose.
+ * The compact terminal preview is bounded. The parent receives all findings
+ * and final prose; presentation limits must never become evidence limits.
  */
 const SUMMARY = 600;
 const CRITERIA = 6;
 const FINDINGS = 8;
 const BLOCKERS = 5;
-const JOBS = 4;
 const LINE = 160;
 
 const one = (text: unknown, limit = LINE): string =>
@@ -69,18 +67,20 @@ const met = (report: Report | undefined, value: 'yes' | 'no' | 'unknown'): numbe
   (report?.criteria ?? []).filter(item => item.met === value).length;
 
 /** What a finished job found, as evidence rather than as an opinion. */
-export function reportLines(job: Job): string[] {
+export function reportLines(job: Job, complete = false): string[] {
+  const text = (value: unknown, limit = LINE): string => complete ? plain(value) : one(value, limit);
+  const take = <T>(items: T[], limit: number): T[] => complete ? items : items.slice(0, limit);
   const report = job.report;
-  if (!report) return [job.reason ? `Ended: ${one(job.reason)}` : `Ended as ${job.state}.`];
-  const criteria = (report.criteria ?? []).filter(item => item.met !== 'yes').slice(0, CRITERIA)
-    .map(item => `- ${item.met === 'no' ? 'not met' : 'unknown'}: ${one(item.criterion)}${item.evidence ? ` — ${one(item.evidence)}` : ''}`);
-  const findings = (report.findings ?? []).slice(0, FINDINGS)
-    .map(item => `- ${one(item.detail)}${item.file ? ` (${one(item.file, 200)}${item.line ? `:${item.line}` : ''})` : ''}`);
-  const blockers = (report.blockers ?? []).slice(0, BLOCKERS).map(item => `- ${one(item)}`);
-  const files = (report.files ?? []).slice(0, FINDINGS).map(item => `- ${item.action} ${one(item.path, 200)} — ${one(item.what)}`);
-  const checks = (report.checks ?? []).map(item => `- ${item.passed ? '✓' : '✗'} ${one(item.command, 200)}`);
+  if (!report) return [job.reason ? `Ended: ${text(job.reason)}` : `Ended as ${job.state}.`];
+  const criteria = take((report.criteria ?? []).filter(item => complete || item.met !== 'yes'), CRITERIA)
+    .map(item => `- ${item.met === 'yes' ? 'met' : item.met === 'no' ? 'not met' : 'unknown'}: ${text(item.criterion)}${item.evidence ? ` — ${text(item.evidence)}` : ''}`);
+  const findings = take(report.findings ?? [], FINDINGS)
+    .map(item => `- ${text(item.detail)}${item.file ? ` (${text(item.file, 200)}${item.line ? `:${item.line}` : ''})` : ''}`);
+  const blockers = take(report.blockers ?? [], BLOCKERS).map(item => `- ${text(item)}`);
+  const files = take(report.files ?? [], FINDINGS).map(item => `- ${item.action} ${text(item.path, 200)} — ${text(item.what)}`);
+  const checks = (report.checks ?? []).map(item => `- ${item.passed ? '✓' : '✗'} ${text(item.command, 200)}`);
   return [
-    `Summary: ${one(report.summary, SUMMARY)}`,
+    `Summary: ${text(report.summary, SUMMARY)}`,
     ...(files.length > 0 ? ['Files:', ...files] : []),
     ...(checks.length > 0 ? ['Checks:', ...checks] : []),
     `Criteria: ${met(report, 'yes')} met, ${met(report, 'no')} not met, ${met(report, 'unknown')} unknown`,
@@ -160,17 +160,15 @@ export function ledgerView(ledger: Ledger | undefined, expanded: boolean, theme?
  * task it belongs to cannot be called done while it is open.
  */
 export function resultContent(jobs: readonly Job[]): string {
-  const shown = jobs.slice(0, JOBS);
-  const rest = jobs.length - shown.length;
+  const shown = jobs;
   const blocked = jobs.filter(job => (job.report?.blockers?.length ?? 0) > 0);
   return [
     `${jobs.length} job${jobs.length === 1 ? '' : 's'} finished (evidence, not a verdict).`,
     ...shown.flatMap(job => [
-      `${one(job.name, 24)} (${job.agent ?? job.role}) · ${one(job.subject, 60)} · ${job.state}`,
-      ...reportLines(job),
+      `${one(job.name, 24)} (${job.agent ?? job.role}) · ${one(job.subject, 60)} · ${job.report?.outcome === 'unassessed' ? 'returned (outcome unassessed)' : job.state}`,
+      ...reportLines(job, true),
       ...(job.patchFile ? [`External patch: ${one(job.patchFile, 300)}`] : []),
     ]),
-    ...(rest > 0 ? [`${rest} more; agent_jobs status.`] : []),
     ...(blocked.length > 0 ? ['Blocked jobs are unresolved. Do not call this task done while they are open.'] : []),
   ].join('\n').trim();
 }
@@ -180,6 +178,7 @@ export function statusOf(job: Job): { label: string; icon: string; color: Return
   if (job.continuedBy) return { label: 'Continued', icon: '↗', color: 'dim' };
   if (job.resolved) return { label: 'Resolved', icon: '✓', color: stateColor('completed') };
   if (job.question || job.report?.outcome === 'blocked' || (job.report?.blockers.length ?? 0) > 0) return { label: 'Needs attention', icon: '!', color: 'warning' };
+  if (job.report?.outcome === 'unassessed') return { label: 'Returned', icon: '↩', color: 'dim' };
   const labels: Record<JobState, string> = { queued: 'Queued', starting: 'Starting', running: 'Running', stopping: 'Stopping', completed: 'Completed', failed: 'Failed', cancelled: 'Cancelled', timed_out: 'Timed out', interrupted: 'Interrupted' };
   return { label: labels[job.state], icon: job.state === 'completed' ? '✓' : job.state === 'running' ? '●' : ['failed', 'timed_out'].includes(job.state) ? '×' : '○', color: stateColor(job.state) };
 }

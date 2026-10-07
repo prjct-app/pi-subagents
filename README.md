@@ -9,7 +9,7 @@ reports and explicit continuation. No external service, scheduler or team setup.
 pi install npm:@prjct.app/pi-subagents
 ```
 
-Tested with Pi **0.85.1–0.85.x**; requires Node **22.19+**.
+Tested with Pi **1.0.4**; requires Node **22.19+**.
 Host libraries use wildcard peers as required by Pi packaging. Compatibility
 with other Pi releases has not been verified. The default runner creates native
 sessions through Pi's SDK. A separate Pi process is available as an explicit option.
@@ -17,6 +17,13 @@ sessions through Pi's SDK. A separate Pi process is available as an explicit opt
 Delegated jobs inherit the parent model and reasoning level, including nested
 jobs and continuations. The complete authorized model catalogue remains available;
 models are not excluded or ranked by price as a proxy for intelligence.
+An unavailable explicit model is refused; ambiguous short names require
+`provider/modelId`. The harness never substitutes a different model.
+
+A normal final answer completes a child execution and reaches the parent in full.
+`subagent_report` remains optional for structured results. Prose results are marked
+`unassessed` (shown as **Returned**), so stopping normally does not claim that the
+task or its checks passed. Errors, truncation and cancellation remain failures.
 
 ## Turn subagents on and off
 

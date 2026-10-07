@@ -273,17 +273,39 @@ test('the model is this session’s unless one from its own list is asked for', 
   const bare = await h.delegate({ model: 'gpt-5.4-mini' }, 'call_bare');
   assert.equal(bare.details.provider, 'openai-codex', 'named without its provider, if that is unambiguous');
 
-  const stale = await h.delegate({ model: 'anthropic/claude-3-opus' }, 'call_stale');
-  assert.match(String(stale.content[0].text), /^anthropic\/claude-3-opus is not enabled in this session, so it runs on /,
-    'a name it does not have runs on this session\'s model, and the result says so: never quietly, never a failed delegation');
+  await assert.rejects(h.delegate({ model: 'anthropic/claude-3-opus' }, 'call_stale'), /not enabled in this session/);
+  assert.equal(h.runs.size, 2, 'a missing explicit model starts no substitute');
 });
 
-test('a scoped session offers its children only what it was scoped to', async () => {
+test('a scoped session refuses a model outside its list without substituting', async () => {
   const h = host({ scoped: [{ provider: 'openai-codex', id: 'gpt-5.4-mini', cost: { input: 0.25, output: 2 } }] });
   await h.emit('session_start', { reason: 'resume' });
-  const job = await h.delegate({ model: 'anthropic/claude-opus-4-5' });
-  assert.equal(`${job.details.provider}/${job.details.modelId}`, 'openai-codex/gpt-5.4-mini', 'the stand-in comes from the scoped list');
-  assert.match(String(job.content[0].text), /is not enabled in this session, so it runs on openai-codex\/gpt-5\.4-mini/);
+  await assert.rejects(h.delegate({ model: 'anthropic/claude-opus-4-5' }), /not enabled in this session/);
+  assert.equal(h.runs.size, 0);
+});
+
+test('ambiguous model IDs require a provider, while fully qualified IDs work', async () => {
+  const h = host({ models: [{ provider: 'first', id: 'shared' }, { provider: 'second', id: 'shared' }] });
+  await h.emit('session_start', { reason: 'resume' });
+  await assert.rejects(h.delegate({ model: 'shared' }), /ambiguous/);
+  assert.equal(h.runs.size, 0);
+  const selected = await h.delegate({ model: 'first/shared' });
+  assert.equal(selected.details.provider, 'first');
+});
+
+test('model and reasoning inheritance is provider-independent at every supported level', async () => {
+  for (const provider of ['openai', 'openai-codex', 'anthropic', 'google', 'xai', 'minimax', 'xiaomi-token-plan-sgp', 'local']) {
+    for (const thinkingLevel of ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      const h = host({ models: [{ provider, id: 'selected-model' }] });
+      h.ctx.thinkingLevel = thinkingLevel;
+      await h.emit('session_start', { reason: 'resume' });
+      const selected = await h.delegate();
+      assert.equal(selected.details.provider, provider);
+      assert.equal(selected.details.modelId, 'selected-model');
+      assert.equal(selected.details.thinkingLevel, thinkingLevel);
+      await h.emit('session_shutdown');
+    }
+  }
 });
 
 test('a finished job reaches the model once, as evidence and not as a verdict', async () => {

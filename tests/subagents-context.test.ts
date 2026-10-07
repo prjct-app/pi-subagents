@@ -60,7 +60,7 @@ test('a child is told its task and what it was handed, and nothing else', () => 
   assert.ok(prompt.includes(roleBrief('reviewer')));
   assert.match(prompt, /Read src\/importer\.ts and report the gaps\./);
   assert.match(prompt, /The retry path was rewritten last week\./);
-  assert.match(prompt, new RegExp(`Calling ${REPORT_TOOL} ends this session`));
+  assert.match(prompt, /Finish with a normal answer/);
   assert.match(prompt, /not a verdict/, 'a child returns evidence; the parent judges');
   assert.match(prompt, /report it as a blocker/, 'and it never waits for anyone');
   assert.match(prompt, /no ambient extensions, skills/);

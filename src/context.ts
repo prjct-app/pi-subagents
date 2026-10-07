@@ -100,14 +100,6 @@ const ROLE_BRIEF: Record<Role, string> = {
 
 export const roleBrief = (role: Role): string => ROLE_BRIEF[role];
 
-/**
- * The prompt a child starts with.
- *
- * It says what the child is, what it cannot do, and that reporting is the only
- * way anything it learns leaves the process. The tone is deliberate: a child
- * with no person watching it must be told that asking is free and that waiting
- * is not, or it will sit on a blocker until a timeout kills it.
- */
 /** The one line each well-known tool gets; anything else is named as given. */
 const TOOL_BLURB: Record<string, string> = {
   read: 'read — open a file under the working directory.',
@@ -145,7 +137,7 @@ export function childPrompt(input: {
   const bash = inherited.includes('bash');
   const tools = [
     ...inherited.map(name => TOOL_BLURB[name] ?? `${name} — inherited from the session that asked.`),
-    `${REPORT_TOOL} — return the report and end. This is the only way anything you learn leaves this process.`,
+    `${REPORT_TOOL} — optionally return structured evidence and end. A normal final answer also returns to the parent.`,
     `${MODEL_TOOL} — list the models this machine can run, or switch to one. You start on the model `
       + 'the session that asked had; you are the one doing this work, so switch only when the assigned task explicitly authorizes a different model.',
     `${MEMORY_TOOL} — look up what this project remembers about something you found. Records, not conclusions.`,
@@ -199,8 +191,8 @@ export function childPrompt(input: {
         + 'and report it as a blocker either way, naming exactly what you need to continue. '
         + 'Do not look for a way around it, and do not wait for anyone.',
     '',
-    `Calling ${REPORT_TOOL} ends this session. Nothing else you write here is read by anyone. `
-    + 'Report once, and report it whole.',
+    `Finish with a normal answer or call ${REPORT_TOOL} for structured results. `
+    + 'Preserve your findings, checks and unresolved blockers. The parent receives your final answer verbatim.',
     '',
     '## Task',
     input.subject.trim(),

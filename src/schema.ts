@@ -186,7 +186,7 @@ export const isTerminal = (state: JobState): boolean => TERMINAL.includes(state)
  * parent's. A child never returns a verdict.
  */
 export const ReportSchema = Type.Object({
-  outcome: StringEnum(['completed', 'blocked', 'failed'] as const),
+  outcome: StringEnum(['completed', 'blocked', 'failed', 'unassessed'] as const),
   summary: Type.String({ minLength: 1 }),
   /** Acceptance criteria the child derived from the task it was given. */
   criteria: Type.Array(Type.Object({
@@ -207,7 +207,8 @@ export const ReportSchema = Type.Object({
   checks: Type.Optional(ChangeReplySchema.properties.checks),
 });
 export type Report = {
-  outcome: 'completed' | 'blocked' | 'failed';
+  /** unassessed preserves a prose answer without inferring task success or blockers. */
+  outcome: 'completed' | 'blocked' | 'failed' | 'unassessed';
   summary: string;
   criteria: { criterion: string; met: Met; evidence: string }[];
   findings: { detail: string; file?: string; line?: number }[];

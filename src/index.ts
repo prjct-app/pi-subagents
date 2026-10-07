@@ -242,35 +242,21 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const externalWorkspace = async (profile: FactoryAgent | undefined, source: string): Promise<ExternalWorkspace | undefined> =>
     profile?.workspace === 'isolated' ? createExternalWorkspace(source, options.workspaceRoot) : undefined;
 
-  /** The model asked for, when this session has it. */
-  const choiceFor = (wanted?: string) => {
-    const asked = wanted?.trim();
-    return asked ? findChoice(state.choices, asked) ?? state.choices.find(choice => choice.modelId === asked) : undefined;
-  };
-
-  /**
-   * A model a job may run on: the one asked for, or this session's own. A name
-   * this session does not have (a stale instruction, a model recalled from
-   * memory) runs on the session's own model instead of failing the delegation.
-   */
+  /** Inherit unless the caller selects an available, unambiguous model. Never substitute. */
   const resolve = (wanted?: string): { provider: string; modelId: string; thinkingLevel?: Job['thinkingLevel'] } | { refused: string } => {
-    const current = (state.ctx as any)?.model;
+    const current = state.ctx?.model;
     const thinkingLevel = state.ctx?.thinkingLevel;
-    const exact = choiceFor(wanted);
-    if (exact) return { provider: exact.provider, modelId: exact.modelId, thinkingLevel };
-    const own = current?.provider && current?.id ? { provider: current.provider as string, modelId: current.id as string, thinkingLevel } : undefined;
-    if (!wanted?.trim()) return own ?? { refused: 'This session has no model to give a job.' };
-    // A scoped session scopes its children too: the stand-in comes from the list.
-    const inList = own && state.choices.some(choice => choice.provider === own.provider && choice.modelId === own.modelId);
-    const standIn = inList ? own : state.choices[0];
-    return standIn ? { provider: standIn.provider, modelId: standIn.modelId, thinkingLevel } : { refused: 'This session has no model to give a job.' };
+    const asked = wanted?.trim();
+    if (!asked) return current ? { provider: current.provider, modelId: current.id, thinkingLevel }
+      : { refused: 'This session has no model to give a job.' };
+    const direct = findChoice(state.choices, asked);
+    const matching = direct ? [direct] : state.choices.filter(choice => choice.modelId === asked);
+    if (matching.length !== 1) return { refused: matching.length > 1
+      ? `Model ${asked} is ambiguous; use provider/modelId.`
+      : `Model ${asked} is not enabled in this session. Choose an available model or omit model to inherit the current one.` };
+    const exact = matching[0]!;
+    return { provider: exact.provider, modelId: exact.modelId, thinkingLevel };
   };
-
-  /** Said once in the delegation result when the asked-for model was not available. */
-  const substituted = (wanted: unknown, used: { provider: string; modelId: string }): string =>
-    typeof wanted === 'string' && wanted.trim() && !choiceFor(wanted)
-      ? `${wanted.trim()} is not enabled in this session, so it runs on ${modelKey(used.provider, used.modelId)}. `
-      : '';
 
   /*
    * A job inherits the session's selected model and reasoning level.
@@ -622,7 +608,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
         return {
           content: [{
             type: 'text' as const,
-            text: `${substituted(input.model, job)}${job.name} (${job.agent ?? job.role}) is on "${job.subject}", using ${modelKey(job.provider, job.modelId)}, `
+            text: `${job.name} (${job.agent ?? job.role}) is on "${job.subject}", using ${modelKey(job.provider, job.modelId)}, `
               + `${job.workspace ? `working in external snapshot ${job.cwd}; proposed changes will be written to ${job.patchFile}` : `reading ${job.cwd}`}. `
               + 'Its report arrives here when it ends. Carry on; do not wait for it, and do not ask again for the same work.',
           }],

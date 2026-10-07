@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,6 +40,35 @@ test('native SDK workers and reviewers execute their own verification commands',
   }
 });
 for (const backend of ['process', 'in-process'] as const) {
+  for (const projectTrusted of [false, true]) test(`${backend}: effective compaction, retry and thinking settings survive child isolation (trusted=${projectTrusted})`, { timeout: 30000 }, async t => {
+    const directory = await mkdtemp(join(tmpdir(), 'agents-settings-'));
+    const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = directory;
+    const cwd = join(directory, 'project'); await mkdir(join(cwd, '.pi'), { recursive: true });
+    await writeFile(join(directory, 'settings.json'), JSON.stringify({
+      compaction: { reserveTokens: 9000, keepRecentTokens: 6000, modelOverrides: { 'subagents-fixture/offline': { reserveTokens: 10000 } } },
+      retry: { enabled: false, maxRetries: 1 }, thinkingBudgets: { high: 1234 },
+      defaultProjectTrust: 'always',
+      packages: ['/ambient-package-must-not-load'], extensions: ['/ambient-extension-must-not-load'], defaultTools: ['write'],
+    }));
+    await writeFile(join(cwd, '.pi', 'settings.json'), JSON.stringify({ compaction: { keepRecentTokens: 7000 } }));
+    const events: RunnerEvent[] = [];
+    const factory = backend === 'process' ? spawnRunner : inProcessRunner;
+    const runner = factory({ guardPath: join(root, 'src', 'child.ts'), extensionPaths: [fixture], projectTrusted: path => projectTrusted && path === cwd,
+      invoke: args => ({ command: process.execPath, args: [cli, ...args] }) });
+    const handle = await runner(job(cwd, { task: 'fixture-settings', thinkingLevel: 'high', tools: ['read'] }), event => events.push(event));
+    t.after(async () => { await handle.stop('test over'); if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; await rm(directory, { recursive: true, force: true }); });
+    await until(() => events.some(event => event.type === 'settled' || event.type === 'failed'));
+    const settled = events.find(event => event.type === 'settled') as Extract<RunnerEvent, { type: 'settled' }>;
+    assert.ok(settled, JSON.stringify(events));
+    const settings = JSON.parse((settled.report as { summary: string }).summary);
+    assert.deepEqual(settings.compaction, { reserveTokens: 9000, keepRecentTokens: projectTrusted ? 7000 : 6000, modelOverrides: { 'subagents-fixture/offline': { reserveTokens: 10000 } } });
+    assert.deepEqual(settings.retry, { enabled: false, maxRetries: 1 });
+    assert.equal(settings.thinkingBudgets.high, 1234);
+    assert.equal(settings.reasoning, 'high');
+    assert.ok(settings.tools.includes('read'));
+    assert.ok(!settings.tools.includes('write'), 'ambient settings cannot widen admitted tools');
+  });
+
   test(`${backend}: a normal final answer returns once without a mandatory report call`, { timeout: 30000 }, async t => {
     const directory = await mkdtemp(join(tmpdir(), 'agents-native-prose-'));
     const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = directory;

@@ -20,3 +20,27 @@ test('activity storage bounds memory, preserves tool identity and sanitizes text
   store.add('j', { kind: 'tool', text: 'read', toolCallId: 'tool', status: 'done' });
   assert.equal(store.get('j').at(-1)!.id, id); assert.equal(store.get('j').at(-1)!.text, 'read');
 });
+
+test('stream replacements count UTF-8 bytes and retained details without recounting old entries', () => {
+  const store = activityStore(() => {});
+  store.add('j', { kind: 'message', text: 'old', messageId: 'old' });
+  store.add('j', { kind: 'tool', text: 'run', detail: 'ñ'.repeat(120000), toolCallId: 't' });
+  const id = store.get('j').at(-1)!.id;
+  store.add('j', { kind: 'tool', text: '😀'.repeat(6000), toolCallId: 't', status: 'done' });
+  assert.equal(store.get('j').length, 1);
+  assert.equal(store.get('j')[0].id, id);
+  assert.equal(store.get('j')[0].detail, 'ñ'.repeat(120000));
+  // Shrinking an existing entry releases its previous byte cost.
+  store.add('j', { kind: 'tool', text: 'done', detail: '', toolCallId: 't' });
+  for (const i of Array.from({ length: 301 }, (_, i) => i)) store.add('j', { kind: 'state', text: String(i) });
+  assert.equal(store.get('j').length, 300);
+  assert.equal(store.get('j')[0].text, '1');
+  store.add('other', { kind: 'state', text: 'independent' });
+  store.forget(['j']);
+  assert.deepEqual(store.get('j'), []);
+  assert.equal(store.get('other').length, 1);
+  store.add('j', { kind: 'state', text: 'fresh' });
+  assert.equal(store.get('j').length, 1);
+  store.clear();
+  assert.deepEqual(store.get('other'), []);
+});

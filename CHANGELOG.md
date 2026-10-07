@@ -1,3 +1,18 @@
+## 0.5.5 (2026-10-07)
+
+- Let every child role use evidence-backed issue reporting when `@prjct.app/pi-signals` is explicitly admitted. Preserve file and command capability boundaries in both SDK runners and factory profiles.
+
+## 0.5.4 (2026-10-07)
+
+- Count UI activity bytes incrementally during streaming instead of rescanning all retained entries. Preserve the full SDK transcript and existing UI limits.
+- Use public Pi contentText and getAgentDir helpers instead of duplicate implementations.
+
+- Admit explicitly loaded session context controls for all child roles without widening file access. Resolve local Pi package installs by their declared package name.
+- Keep both runners alive across native checkpoint settlement and continuation; report checkpoint failures without retrying or silently abandoning the child.
+
+- Preserve effective Pi compaction, retry and thinking-budget settings in native child sessions instead of silently reverting to host defaults.
+- Carry explicit parent project trust into both runners. Project settings remain excluded when trust is absent; ambient extensions remain disabled and admitted tools stay unchanged.
+
 ## 0.5.3 (2026-10-07)
 
 - Accept normal final answers in both public SDK runners without a formatting retry. Mark prose outcomes unassessed; retain provider errors, truncation, cancellation and SDK retry semantics.

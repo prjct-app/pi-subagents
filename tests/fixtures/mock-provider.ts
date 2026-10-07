@@ -15,6 +15,16 @@ export default function fixtureProvider(pi: ExtensionAPI): void {
       const wait = text.includes('fixture-wait');
       const finish = () => {
         if (wait) { message.stopReason = 'aborted'; stream.push({ type: 'error', reason: 'aborted', error: message }); stream.end(); return; }
+        if (text.includes('fixture-settings')) {
+          const settings = pi.getSettings();
+          message.stopReason = 'stop';
+          message.content = [{ type: 'text', text: JSON.stringify({
+            compaction: settings.compaction, retry: settings.retry,
+            thinkingBudgets: options?.thinkingBudgets, reasoning: options?.reasoning,
+            tools: context.messages.flatMap(m => m.role === 'system' ? m.toolsAdded ?? [] : []).map(tool => tool.name),
+          }) }];
+          stream.push({ type: 'done', reason: 'stop', message }); stream.end(); return;
+        }
         if (text.includes('fixture-prose')) {
           message.stopReason = 'stop';
           message.content = [{ type: 'text', text: 'Encontré el problema.\nFalta validar producción; no afirmo que pase.\nFINAL_EVIDENCE' }];

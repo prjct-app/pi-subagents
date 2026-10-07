@@ -1,10 +1,10 @@
-import type { AssistantMessage } from '@earendil-works/pi-ai';
+import { contentText, type AssistantMessage } from '@earendil-works/pi-ai';
 import type { Report } from './schema.ts';
 
 /** Only a successful final message can replace the optional report tool. */
 export const finalAnswer = (message: AssistantMessage | undefined): Report | undefined => {
   if (message?.stopReason !== 'stop' || message.content.some(part => part.type === 'toolCall')) return undefined;
-  const text = message.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
+  const text = contentText(message.content);
   if (!text.trim()) return undefined;
   return { outcome: 'unassessed', summary: text, criteria: [], findings: [], blockers: [] };
 };

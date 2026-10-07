@@ -1,3 +1,4 @@
+import { checkpointProgress } from './checkpoint.ts';
 import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type AgentSession } from '@earendil-works/pi-coding-agent';
 import { installGuard } from './child.ts';
 import { agentHome, roleTools } from './config.ts';
@@ -77,7 +78,12 @@ export function inProcessRunner(options: Options): Runner {
     };
     try {
       const file = options.prepare ? await options.prepare(job) : undefined;
-      const settings = SettingsManager.inMemory({ defaultTools: tools });
+      // Match the process runner's effective Pi settings (including compaction,
+      // provider retries and thinking budgets), without discovering ambient
+      // extension packages or changing the child's admitted capabilities.
+      const trusted = options.projectTrusted?.(job.cwd) === true;
+      const configured = SettingsManager.create(job.cwd, agentHome(), { projectTrusted: trusted });
+      const settings = SettingsManager.inMemory({ ...configured.getSettings(), packages: [], extensions: [], defaultTools: tools }, { projectTrusted: trusted });
       const loader = new DefaultResourceLoader({
         cwd: job.cwd, agentDir: agentHome(), settingsManager: settings,
         noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true,
@@ -106,9 +112,12 @@ export function inProcessRunner(options: Options): Runner {
       session.setActiveToolsByName(tools);
       const baseline = session.getSessionStats();
       const claims = new Map<string, unknown>();
+      const checkpoint = checkpointProgress();
       session.subscribe(event => {
         if (slot.done) return;
         const raw = event as any;
+        const checkpointFailure = checkpoint.observe(raw);
+        if (checkpointFailure) { terminal({ type: 'failed', reason: checkpointFailure }); return; }
         if (raw.type === 'message_end' && raw.message?.role === 'assistant') slot.lastAssistant = raw.message;
         const activity = activityOf(raw);
         if (activity) emit({ type: 'activity', activity });
@@ -121,7 +130,7 @@ export function inProcessRunner(options: Options): Runner {
           emit({ type: 'report', report });
           terminal({ type: 'settled', report, usage: { tokens: Math.max(0, stats.tokens.total - baseline.tokens.total), cost: Math.max(0, stats.cost - baseline.cost), calls: Math.max(0, stats.toolCalls - baseline.toolCalls) } });
         }
-        if (raw.type === 'agent_settled') {
+        if (raw.type === 'agent_settled' && !checkpoint.waiting) {
           const report = finalAnswer(slot.lastAssistant);
           const stats = session.getSessionStats();
           const usage = { tokens: Math.max(0, stats.tokens.total - baseline.tokens.total), cost: Math.max(0, stats.cost - baseline.cost), calls: Math.max(0, stats.toolCalls - baseline.toolCalls) };

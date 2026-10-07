@@ -8,7 +8,7 @@ import {
   READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   ReportSchema, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkReport, reportProblems, type DelegateAnswer,
 } from './schema.ts';
-import { childBashAllowed } from './config.ts';
+import { childBashAllowed, SESSION_TOOLS } from './config.ts';
 import { post, recent } from './wire.ts';
 import { ENGLISH_RULE, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { maskSensitiveData, protectOutboundData } from '@prjct.app/pi-secrets/privacy';
@@ -246,7 +246,7 @@ export function installGuard(
   // Enforce the operator's switch again inside the child. The admitted tools are the first gate;
   // this one also catches a stale job or a tool injected by another route.
   const capabilities = env.PI_SUBAGENTS_ROLE === 'explorer' || env.PI_SUBAGENTS_ROLE === 'reviewer'
-    ? new Set([...READ_ONLY_TOOLS, ...CHILD_TOOLS, DELEGATE_TOOL, WIRE_SEND_TOOL, WIRE_INBOX_TOOL,
+    ? new Set([...READ_ONLY_TOOLS, ...CHILD_TOOLS, ...SESSION_TOOLS, DELEGATE_TOOL, WIRE_SEND_TOOL, WIRE_INBOX_TOOL,
       ...(env.PI_SUBAGENTS_ROLE === 'reviewer' ? ['bash'] : [])]) : undefined;
   const allowed = requested.filter(tool => (tool !== 'bash' || bash) && (!capabilities || capabilities.has(tool)));
 

@@ -1,3 +1,4 @@
+import { checkpointProgress } from './checkpoint.ts';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { finalAnswer, missingAnswer } from './final-answer.ts';
 import { activityOf, type ActivityInput } from './activity.ts';
@@ -138,14 +139,14 @@ export function frames(onFrame: (value: unknown) => void, onOverflow: () => void
  * credentials, and a child given an empty one has no models at all. What is
  * isolated is context — extensions, skills and prompt templates — not config.
  */
-export function childArgs(guardPath: string, tools: readonly string[] = CHILD_TOOLS): string[] {
+export function childArgs(guardPath: string, tools: readonly string[] = CHILD_TOOLS, projectTrusted = false): string[] {
   return [
     '--mode', 'rpc',
     // Ambient discovery off; only the guard this package owns is loaded.
     '--no-extensions', '-e', guardPath,
     '--no-skills', '--no-prompt-templates',
-    // Non-interactive: never prompt a person who is not watching.
-    '--no-approve',
+    // Carry explicit parent trust; never ask a person in a background child.
+    projectTrusted ? '--approve' : '--no-approve',
     // The inherited allowlist; the guard enforces the same set from inside.
     '--tools', tools.join(','),
   ];
@@ -212,6 +213,8 @@ export async function rememberFor(job: Job, query: unknown,
 export function spawnRunner(options: {
   guardPath: string;
   extensionPaths?: string[];
+  /** Session-only project trust from the parent, when it knows this directory. */
+  projectTrusted?: (cwd: string) => boolean | undefined;
   verifyCapabilities?: boolean;
   prepare?: (job: Job) => Promise<string>;
   /** How to launch the child. Injected so a test never reaches for a binary. */
@@ -262,7 +265,7 @@ export function spawnRunner(options: {
       ...(wired ? [WIRE_SEND_TOOL, WIRE_INBOX_TOOL] : []),
     ])];
     const sessionFile = options.prepare ? await options.prepare(job) : undefined;
-    const args = childArgs(options.guardPath, tools);
+    const args = childArgs(options.guardPath, tools, options.projectTrusted?.(job.cwd) === true);
     if (job.thinkingLevel) args.push('--thinking', job.thinkingLevel);
     if (sessionFile) args.push('--session', sessionFile);
     for (const path of options.extensionPaths ?? []) args.push('-e', path);
@@ -297,6 +300,7 @@ export function spawnRunner(options: {
     const claimed = new Map<string, unknown>();
     /** Sibling-mail forwarding state, declared before any terminal path runs. */
     const forward = { timer: undefined as ReturnType<typeof setInterval> | undefined };
+    const checkpoint = checkpointProgress();
     const state = {
       observed: undefined as Usage | undefined,
       toolCalls: 0,
@@ -473,6 +477,8 @@ export function spawnRunner(options: {
           ...(typeof usage.cost?.total === 'number' ? { cost: (state.observed?.cost ?? 0) + usage.cost.total } : {}),
         };
       }
+      const checkpointFailure = checkpoint.observe(message as any);
+      if (checkpointFailure) { terminal({ type: 'failed', reason: checkpointFailure }); return; }
       const activity = activityOf(message);
       if (activity && !state.done) emit({ type: 'activity', activity });
       if (message.type === 'extension_ui_request' && message.method === 'notify' && String(message.message).startsWith(READY_PREFIX)) {
@@ -509,7 +515,7 @@ export function spawnRunner(options: {
       // followed by an automatic retry, and a job must not be called finished
       // while the child is still going.
       if (message.type === 'agent_settled') {
-        void finish();
+        if (!checkpoint.waiting) void finish();
         return;
       }
       if (message.type === 'extension_ui_request' && message.id !== undefined) {

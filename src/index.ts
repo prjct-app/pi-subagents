@@ -1,11 +1,11 @@
 import { protectOutboundData } from '@prjct.app/pi-secrets/privacy';
-import { BASH_ROLES, defaultSettings, loadSettings, roleTools, inheritedCapabilities, extensionPaths, agentHome } from './config.ts';
+import { SESSION_TOOLS, BASH_ROLES, defaultSettings, loadSettings, roleTools, inheritedCapabilities, extensionPaths, agentHome } from './config.ts';
 import { cleanupStorage, storageRoot, sessionRoot, prepareSession, retainSettlement, resumable } from './storage.ts';
 import { inProcessRunner } from './in-process.ts';
 import type { Activity } from './activity.ts';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { StringEnum } from '@earendil-works/pi-ai';
+import { contentText, StringEnum } from '@earendil-works/pi-ai';
 import { ModelRuntime, type ExtensionAPI, type ExtensionContext } from '@earendil-works/pi-coding-agent';
 import { Container, Key, Text } from '@earendil-works/pi-tui';
 import { ENGLISH_RULE, SYMBOL, brand, completer, row, setMode, repairToolArgs } from '@prjct.app/pi-tui-kit';
@@ -224,8 +224,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   const factoryTools = (profile: FactoryAgent | undefined, role: Role, available = inheritedTools(role)): string[] => {
     if (!profile) return available;
-    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash'];
-    return available.filter(tool => safe.includes(tool) && (role === 'worker' || READ_ONLY_ABILITIES.includes(tool)
+    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', ...SESSION_TOOLS];
+    return available.filter(tool => safe.includes(tool) && (role === 'worker' || SESSION_TOOLS.includes(tool) || READ_ONLY_ABILITIES.includes(tool)
       || (tool === 'bash' && BASH_ROLES.includes(role))));
   };
   const resolveProfile = (agent?: string, legacyRole?: Role): { role: Role; profile?: FactoryAgent } => {
@@ -397,7 +397,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     const reply = registry.streamSimple ? await registry.streamSimple(model, request, settings).result()
       : await runtime!.completeSimple(model, request, settings);
     if (reply.stopReason === 'error' || reply.stopReason === 'aborted') return '';
-    return reply.content.flatMap(part => part.type === 'text' ? [part.text] : []).join('\n');
+    return contentText(reply.content);
   });
 
   /**
@@ -481,6 +481,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       guardPath: GUARD, verifyCapabilities: true, depth: state.settings.limits.depth, onDelegate, onAsk, catalogue: () => state.choices,
       wireRoot: options.wireRoot ?? directory,
       extensionPaths: extensionPaths(state.settings.extensionPackages, ctx().cwd),
+      projectTrusted: (cwd: string) => cwd === ctx().cwd ? ctx().isProjectTrusted() : undefined,
       prepare: (job: Job) => prepareSession(job, directory),
       memory: (job: Job, query: string) => childMemory(job.role, query),
     };

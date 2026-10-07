@@ -14,6 +14,10 @@ Host libraries use wildcard peers as required by Pi packaging. Compatibility
 with other Pi releases has not been verified. The default runner creates native
 sessions through Pi's SDK. A separate Pi process is available as an explicit option.
 
+Both runners retain Pi's global compaction, retry and thinking-budget settings.
+Project settings apply when the parent explicitly trusts the child's directory.
+Ambient extension discovery stays disabled and configured tools remain an allowlist.
+
 Delegated jobs inherit the parent model and reasoning level, including nested
 jobs and continuations. The complete authorized model catalogue remains available;
 models are not excluded or ranked by price as a proxy for intelligence.
@@ -169,6 +173,18 @@ the hard deadline. Supported maxima are 256 concurrent jobs, 256 session runs, d
 24 hours per tree and 48 KiB of task plus context. Session retention accepts 1–365 days;
 external workspace retention accepts 1–720 hours. `artifactPolicy` is `requested` by
 default or `none` to disable product-documentation artifacts.
+
+Optional session controls (`context_status`, `context_history`, `context_compact`)
+are inherited by all roles only when their package is explicitly loaded and the
+parent exposes those tools. Each child owns its checkpoint decision. Both runners
+wait through a requested checkpoint and its continuation instead of treating the
+intermediate Pi settlement as a completed task. Checkpoint failure preserves the
+session journal and reports the failure to the parent. A deliberately paused
+checkpoint is reported as unfinished work.
+
+Absolute package directories pinned in Pi's global `packages` settings take
+precedence when resolving an explicitly named child package. Untrusted project
+package settings and unrelated ambient tools are not discovered.
 
 `extensionPackages` names already-installed npm packages with explicit
 `pi.extensions` entries. Packages are resolved from the project and Pi agent/npm

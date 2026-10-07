@@ -92,3 +92,35 @@ test('retention removes only expired owned terminal jobs, never active or symlin
   assert.equal(await stat(join(dir, old.id)).catch(() => undefined), undefined);
   assert.ok(await stat(join(dir, active.id))); assert.ok(await stat(join(dir, fresh.id))); assert.ok(await stat(join(external, 'keep')));
 });
+
+test('context controls require package admission and are available to every role', () => {
+  const controls = ['context_status', 'context_history', 'context_compact'];
+  for (const role of ['worker', 'reviewer', 'explorer'] as const) {
+    assert.deepEqual(roleTools(role, ['read', ...controls], true, false), ['read']);
+    assert.deepEqual(roleTools(role, ['read', ...controls], true, true), ['read', ...controls]);
+  }
+  assert.deepEqual(inheritedCapabilities(controls, controls.map(name => ({name,sourceInfo:{path:'/context/index.js'}})), []), []);
+});
+
+test('bug reporting requires explicit package admission for every role', () => {
+  const reporting = ['signal_inspect', 'signal_report'];
+  for (const role of ['worker', 'reviewer', 'explorer'] as const) {
+    assert.deepEqual(roleTools(role, ['read', ...reporting], false, false), ['read']);
+    assert.deepEqual(roleTools(role, ['read', ...reporting], false, true), ['read', ...reporting]);
+  }
+  const definitions = reporting.map(name => ({ name, sourceInfo: { path: '/improve/index.ts' } }));
+  assert.deepEqual(inheritedCapabilities(reporting, definitions, ['/unrelated/index.ts']), []);
+  assert.deepEqual(inheritedCapabilities(reporting, definitions, ['/improve/index.ts']), reporting);
+});
+
+test('explicit child packages resolve the active local install without discovering project extensions', async t => {
+  const { extensionPaths } = await import('../src/config.ts');
+  const root=await fixture(t),home=join(root,'home'),project=join(root,'project'),installed=join(home,'npm/local-packages/context-1');
+  await mkdir(installed,{recursive:true});await mkdir(join(project,'.pi'),{recursive:true});
+  await writeFile(join(installed,'package.json'),JSON.stringify({name:'@fixture/context',pi:{extensions:['./index.js']}}));
+  await writeFile(join(home,'settings.json'),JSON.stringify({packages:[installed]}));
+  await writeFile(join(project,'.pi/settings.json'),JSON.stringify({packages:['/untrusted/project-package']}));
+  assert.deepEqual(extensionPaths(['@fixture/context'],project,home),[join(installed,'index.js')]);
+  assert.deepEqual(extensionPaths([],project,home),[]);
+  assert.throws(()=>extensionPaths(['@fixture/ambient'],project,home),/not installed/);
+});

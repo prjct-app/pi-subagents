@@ -2,11 +2,12 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
+import { getAgentDir as agentHome, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { DEFAULT_LIMITS, type Limits } from './manager.ts';
 import { READ_ONLY_ABILITIES, type Role } from './schema.ts';
 
 export type Settings = { runner: 'process' | 'in-process'; retentionDays: number; workspaceRetentionHours: number; artifactPolicy: 'none' | 'requested'; extensionPackages: string[]; limits: Limits };
-export const agentHome = (): string => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent');
+export { agentHome };
 /** Package-owned state stays outside both Pi's resource tree and client repositories. */
 export const prjctHome = (): string => process.env.PRJCT_HOME ?? join(homedir(), '.prjct');
 export const defaultSettings = (): Settings => ({ runner: 'in-process', retentionDays: 7, workspaceRetentionHours: 24, artifactPolicy: 'requested', extensionPackages: [], limits: { ...DEFAULT_LIMITS } });
@@ -44,6 +45,10 @@ export function loadSettings(cwd: string, home = agentHome(), warn: (text: strin
 
 const READ_ONLY = new Set<string>(READ_ONLY_ABILITIES);
 const CORE_TOOLS = new Set<string>([...READ_ONLY, 'edit', 'write', 'bash']);
+/** Session-local controls require explicit package admission, even for readers. */
+export const CONTEXT_TOOLS = ['context_status', 'context_history', 'context_compact'];
+/** Reporting can publish externally and crosses only through explicit package admission. */
+export const SESSION_TOOLS = [...CONTEXT_TOOLS, 'signal_inspect', 'signal_report'];
 
 /** Only tools belonging to the packages the child actually loads may cross. */
 export function inheritedCapabilities(active: readonly string[], definitions: readonly { name: string; sourceInfo?: { path: string } }[],
@@ -73,18 +78,23 @@ export function roleTools(role: Role, active: readonly string[], allowBash = chi
   const tools = active.filter(name => !name.startsWith('agent_') && !name.startsWith('subagent_'))
     .filter(name => allowExtensionTools || CORE_TOOLS.has(name));
   const bash = allowBash && BASH_ROLES.includes(role);
-  if (role !== 'worker') return tools.filter(name => READ_ONLY.has(name) || (name === 'bash' && bash));
+  if (role !== 'worker') return tools.filter(name => READ_ONLY.has(name) || (allowExtensionTools && SESSION_TOOLS.includes(name)) || (name === 'bash' && bash));
   return tools.filter(name => name !== 'bash' || bash);
 }
 
 /** Only already-installed, explicitly named packages are resolved; no installation or ambient discovery. */
 export function extensionPaths(packages: readonly string[], cwd: string, home = agentHome()): string[] {
+  const sources = SettingsManager.create(cwd, home, { projectTrusted: false }).getGlobalSettings().packages ?? [];
+  const localManifests = sources.flatMap(source => {
+    const path = typeof source === 'string' ? source : source.source;
+    return isAbsolute(path) ? [join(path, 'package.json')] : [];
+  });
   return packages.flatMap(name => {
     const candidates = [cwd, home, join(home, 'npm'), process.cwd()];
-    const manifests = candidates.flatMap(base => {
+    const manifests = [...localManifests, ...candidates.flatMap(base => {
       const require = createRequire(join(base, '__subagents__.cjs'));
       return (require.resolve.paths(name) ?? []).map(path => join(path, name, 'package.json'));
-    });
+    })];
     const manifest = manifests.find(path => {
       try { return JSON.parse(readFileSync(path, 'utf8')).name === name; } catch { return false; }
     });

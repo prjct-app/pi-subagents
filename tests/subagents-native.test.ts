@@ -40,6 +40,28 @@ test('native SDK workers and reviewers execute their own verification commands',
   }
 });
 for (const backend of ['process', 'in-process'] as const) {
+  test(`${backend}: a normal final answer returns once without a mandatory report call`, { timeout: 30000 }, async t => {
+    const directory = await mkdtemp(join(tmpdir(), 'agents-native-prose-'));
+    const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = directory;
+    const events: RunnerEvent[] = [];
+    const factory = backend === 'process' ? spawnRunner : inProcessRunner;
+    const runner = factory({ guardPath: join(root, 'src', 'child.ts'), extensionPaths: [fixture],
+      invoke: args => ({ command: process.execPath, args: [cli, ...args] }), prepare: child => prepareSession(child, join(directory, 'sessions')) });
+    const handle = await runner(job(directory, { task: 'fixture-prose' }), event => events.push(event));
+    t.after(async () => { await handle.stop('test over'); if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; await rm(directory, { recursive: true, force: true }); });
+    await until(() => events.some(event => event.type === 'settled' || event.type === 'failed'));
+    const settled = events.find(event => event.type === 'settled') as Extract<RunnerEvent, { type: 'settled' }>;
+    assert.ok(settled, JSON.stringify(events));
+    assert.equal((settled.report as any).summary, 'Encontré el problema.\nFalta validar producción; no afirmo que pase.\nFINAL_EVIDENCE');
+    assert.equal((settled.report as any).outcome, 'unassessed', 'a normal stop is not proof that the task passed');
+    assert.deepEqual((settled.report as any).criteria, []);
+    assert.equal(settled.usage?.tokens, 15, 'one model answer, no formatting recovery turn');
+    await handle.stop('completed');
+    const session = events.find(event => event.type === 'session') as Extract<RunnerEvent, { type: 'session' }>;
+    const entries = (await readFile(session.file, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(entries.filter(entry => entry.type === 'message' && entry.message.role === 'assistant').length, 1);
+  });
+
   test(`${backend}: actual Pi reports with an offline provider and retained conversation`, { timeout: 30000 }, async t => {
     const directory = await mkdtemp(join(tmpdir(), 'agents-native-'));
     const previous = process.env.PI_CODING_AGENT_DIR;

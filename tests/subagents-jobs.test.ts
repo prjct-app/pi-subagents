@@ -146,7 +146,7 @@ test('a running root is told to narrow and report before its deadline', async ()
   clock.now = NOW + DEFAULT_LIMITS.timeoutMs * 0.85;
   await jobs.tick(); await jobs.tick();
   assert.equal(of(root).steers.length, 2, 'the final reminder is sent only once');
-  assert.match(of(root).steers[1], /call subagent_report/);
+  assert.match(of(root).steers[1], /final answer or subagent_report/);
   assert.equal(find(jobs.ledger(), root.id)?.state, 'running');
 });
 

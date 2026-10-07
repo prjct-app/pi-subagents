@@ -1,3 +1,5 @@
+import type { AssistantMessage } from '@earendil-works/pi-ai';
+import { finalAnswer, missingAnswer } from './final-answer.ts';
 import { activityOf, type ActivityInput } from './activity.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -301,11 +303,11 @@ export function spawnRunner(options: {
       baseline: undefined as Usage | undefined,
       seq: 0, stderr: '',
       report: undefined as unknown,
-      finishing: false, done: false, nudged: false,
+      finishing: false, done: false,
+      lastAssistant: undefined as AssistantMessage | undefined,
       stopping: undefined as Promise<void> | undefined,
     };
     const alive = (): boolean => child.exitCode === null && child.signalCode === null;
-    const REPORT_NUDGE = `You settled without calling ${REPORT_TOOL}. Call ${REPORT_TOOL} now with the evidence you have. Do not wait. This is the last chance to report.`;
     const send = (command: Record<string, unknown>): Promise<Record<string, unknown>> => {
       const id = ++state.seq;
       const wait = new Promise<Record<string, unknown>>(resolve => pending.set(id, resolve));
@@ -439,19 +441,15 @@ export function spawnRunner(options: {
      * nobody asked for.
      */
     const finish = async (): Promise<void> => {
-      if (state.finishing || state.stopping) return;
-      if (state.report === undefined && alive() && !state.nudged) {
-        state.nudged = true;
-        // agent_settled means the child is idle. Pi accepts a steer in that
-        // state but only queues it and starts no turn, so completed research
-        // was lost as a failed job. A prompt starts one bounded recovery turn.
-        const prompted = await within(2_000, send({ type: 'prompt', message: REPORT_NUDGE }), { success: false } as Record<string, unknown>);
-        if (prompted.success === true && state.report === undefined && alive() && !state.done && !state.stopping) return;
+      if (state.done || state.finishing || state.stopping) return;
+      if (state.report === undefined) {
+        const report = finalAnswer(state.lastAssistant);
+        if (report) { state.report = report; emit({ type: 'report', report }); }
       }
       state.finishing = true;
       const usage = state.observed ? { ...state.observed, calls: state.toolCalls } : await spent();
       if (state.report === undefined) {
-        terminal({ type: 'failed', reason: 'The child ended without reporting.', ...(usage ? { usage } : {}) });
+        terminal({ type: 'failed', reason: missingAnswer(state.lastAssistant), ...(usage ? { usage } : {}) });
         return;
       }
       terminal({ type: 'settled', report: state.report, ...(usage ? { usage } : {}) });
@@ -468,6 +466,7 @@ export function spawnRunner(options: {
       const message = value as Record<string, any>;
       if (!state.done && message.type === 'tool_execution_start') state.toolCalls += 1;
       if (!state.done && message.type === 'message_end' && message.message?.role === 'assistant') {
+        state.lastAssistant = message.message;
         const usage = message.message.usage;
         if (usage && typeof usage.totalTokens === 'number') state.observed = {
           tokens: (state.observed?.tokens ?? 0) + usage.totalTokens,
@@ -488,7 +487,7 @@ export function spawnRunner(options: {
       /**
        * The report is the arguments of the child's own report call, read off
        * the event stream. There is no side channel to trust, no transcript to
-       * scrape, and nothing the child says in prose can be mistaken for one.
+       * scrape. A successful final prose answer is handled separately at settlement.
        */
       if (message.type === 'tool_execution_start' && message.toolName === REPORT_TOOL) {
         if (claimed.size >= MAX_OPEN_REPORTS) claimed.delete(claimed.keys().next().value as string);

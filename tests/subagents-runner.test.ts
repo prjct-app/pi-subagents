@@ -237,37 +237,41 @@ test('a child that will not take the task fails instead of sitting there', async
   assert.equal(child.sent.some((m: any) => m.type === 'abort'), true, 'and it is not left running');
 });
 
-test('an agent_end settles nothing, and ending without a report is a failure', async () => {
+test('agent_end does not settle; a final answer does, with no formatting retry', async () => {
   const { child, events, ended } = await started({}, live);
   await until('it is running', () => events.some(event => event.type === 'running'));
-
-  // An agent_end can be followed by a retry, so it settles nothing.
   child.say({ type: 'agent_end', messages: [], willRetry: true });
   await settleTick();
-  assert.equal(ended(), undefined, 'agent_end alone settles nothing');
-
+  assert.equal(ended(), undefined);
+  child.say({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Full result.' }] } });
   child.say({ type: 'agent_settled' });
-  await until('it prompts for a report', () => child.sent.some((message: any) =>
-    message.type === 'prompt' && String(message.message ?? '').includes('subagent_report')));
-  assert.equal(child.sent.some((message: any) => message.type === 'steer'
-    && String(message.message ?? '').includes('subagent_report')), false,
-  'an idle child needs a prompt; an accepted steer starts no recovery turn');
-  assert.equal(ended(), undefined, 'one chance to report before failing');
-
-  child.say({ type: 'agent_settled' });
-  await until('it fails', () => ended() !== undefined);
-  assert.match((ended() as any).reason, /ended without reporting/);
+  await until('it settles', () => ended() !== undefined);
+  assert.equal((ended() as any).report.summary, 'Full result.');
+  assert.equal((ended() as any).report.outcome, 'unassessed');
+  assert.equal(child.sent.filter((message: any) => message.type === 'prompt').length, 1);
 });
 
-test('a child that reports after the nudge still settles', async () => {
+for (const reason of ['error', 'aborted', 'length', 'toolUse']) test(`a ${reason} message never becomes a successful prose result`, async () => {
+  const { child, events, ended } = await started({}, live);
+  await until('it is running', () => events.some(event => event.type === 'running'));
+  // An earlier normal-looking message cannot hide the last failed attempt.
+  child.say({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'Earlier output.' }] } });
+  child.say({ type: 'message_end', message: { role: 'assistant', stopReason: reason, errorMessage: 'Provider detail', content: [{ type: 'text', text: 'Partial output.' }] } });
+  child.say({ type: 'agent_end', willRetry: true });
+  assert.equal(ended(), undefined, 'the SDK still owns retries');
+  child.say({ type: 'agent_settled' });
+  await until('it fails', () => ended() !== undefined);
+  assert.equal(ended()?.type, 'failed');
+  assert.equal(child.sent.filter((message: any) => message.type === 'prompt').length, 1);
+});
+
+test('empty settlement fails without a fabricated result or extra model call', async () => {
   const { child, events, ended } = await started({}, live);
   await until('it is running', () => events.some(event => event.type === 'running'));
   child.say({ type: 'agent_settled' });
-  await until('it prompts for a report', () => child.sent.some((message: any) =>
-    message.type === 'prompt' && String(message.message ?? '').includes('subagent_report')));
-  child.report({ outcome: 'completed', summary: 'done' });
-  await until('it settles', () => ended() !== undefined);
-  assert.equal((ended() as any).type, 'settled');
+  await until('it fails', () => ended() !== undefined);
+  assert.match((ended() as any).reason, /without a final answer/);
+  assert.equal(child.sent.filter((message: any) => message.type === 'prompt').length, 1);
 });
 
 test('stopping a child that then settles without a report is not a failure of the job', async () => {

@@ -1,7 +1,7 @@
 import { checkpointProgress } from './checkpoint.ts';
-import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager, type AgentSession } from '@earendil-works/pi-coding-agent';
+import { createAgentSession, createCodemodeExtension, DefaultResourceLoader, SessionManager, SettingsManager, type AgentSession } from '@earendil-works/pi-coding-agent';
 import { installGuard } from './child.ts';
-import { agentHome, roleTools } from './config.ts';
+import { agentHome, roleTools, SCRIPT_TOOL } from './config.ts';
 import { activityOf } from './activity.ts';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import { finalAnswer, missingAnswer } from './final-answer.ts';
@@ -94,7 +94,7 @@ export function inProcessRunner(options: Options): Runner {
           PI_SUBAGENTS_ALLOW_BASH: process.env.PI_SUBAGENTS_ALLOW_BASH,
           PI_SUBAGENTS_CAN_DELEGATE: mayDelegate ? '1' : '0',
           ...(wired ? { PI_SUBAGENTS_WIRE: job.wire, PI_SUBAGENTS_WIRE_ROOT: options.wireRoot, PI_SUBAGENTS_ALIAS: job.name } : {}),
-        }, decide); }],
+        }, decide); }, ...(tools.includes(SCRIPT_TOOL) ? [createCodemodeExtension()] : [])],
       });
       await loader.reload();
       if (loader.getExtensions().errors.length) throw new Error(loader.getExtensions().errors.map(error => error.error).join('; '));

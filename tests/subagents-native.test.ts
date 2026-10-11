@@ -40,6 +40,21 @@ test('native SDK workers and reviewers execute their own verification commands',
   }
 });
 for (const backend of ['process', 'in-process'] as const) {
+  test(`${backend}: an explorer that inherits codemode runs scripts, and the guard still blocks bash inside them`, { timeout: 30000 }, async t => {
+    const directory = await mkdtemp(join(tmpdir(), 'agents-codemode-'));
+    const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = directory;
+    await writeFile(join(directory, 'note.txt'), 'READ_OK\n');
+    const events: RunnerEvent[] = [];
+    const factory = backend === 'process' ? spawnRunner : inProcessRunner;
+    const runner = factory({ guardPath: join(root, 'src', 'child.ts'), extensionPaths: [fixture], invoke: args => ({ command: process.execPath, args: [cli, ...args] }) });
+    const handle = await runner(job(directory, { role: 'explorer', task: 'fixture-codemode', tools: ['read', 'bash', 'codemode'] }), event => events.push(event));
+    t.after(async () => { await handle.stop('test over'); if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous; await rm(directory, { recursive: true, force: true }); });
+    await until(() => events.some(event => event.type === 'settled' || event.type === 'failed'));
+    const settled = events.find(event => event.type === 'settled') as Extract<RunnerEvent, { type: 'settled' }>;
+    assert.ok(settled, JSON.stringify(events));
+    assert.deepEqual((settled.report as { checks: unknown }).checks, [{ command: 'codemode', passed: true }]);
+  });
+
   for (const projectTrusted of [false, true]) test(`${backend}: effective compaction, retry and thinking settings survive child isolation (trusted=${projectTrusted})`, { timeout: 30000 }, async t => {
     const directory = await mkdtemp(join(tmpdir(), 'agents-settings-'));
     const previous = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = directory;

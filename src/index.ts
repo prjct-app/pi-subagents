@@ -1,5 +1,5 @@
 import { protectOutboundData } from '@prjct.app/pi-secrets/privacy';
-import { SESSION_TOOLS, BASH_ROLES, defaultSettings, loadSettings, roleTools, inheritedCapabilities, extensionPaths, agentHome } from './config.ts';
+import { SCRIPT_TOOL, SESSION_TOOLS, BASH_ROLES, defaultSettings, loadSettings, roleTools, inheritedCapabilities, extensionPaths, agentHome } from './config.ts';
 import { cleanupStorage, storageRoot, sessionRoot, prepareSession, retainSettlement, resumable } from './storage.ts';
 import { inProcessRunner } from './in-process.ts';
 import type { Activity } from './activity.ts';
@@ -233,8 +233,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
 
   const factoryTools = (profile: FactoryAgent | undefined, role: Role, available = inheritedTools(role)): string[] => {
     if (!profile) return available;
-    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', ...SESSION_TOOLS];
-    return available.filter(tool => safe.includes(tool) && (role === 'worker' || SESSION_TOOLS.includes(tool) || READ_ONLY_ABILITIES.includes(tool)
+    const safe = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', SCRIPT_TOOL, ...SESSION_TOOLS];
+    return available.filter(tool => safe.includes(tool) && (role === 'worker' || SESSION_TOOLS.includes(tool) || READ_ONLY_ABILITIES.includes(tool) || tool === SCRIPT_TOOL
       || (tool === 'bash' && BASH_ROLES.includes(role))));
   };
   const resolveProfile = (agent?: string, legacyRole?: Role): { role: Role; profile?: FactoryAgent } => {
@@ -564,6 +564,8 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     pi.registerTool({
       name: 'agent_delegate',
       label: 'Delegate a job',
+      // Delegation is the model's decision; codemode scripts cannot start jobs.
+      exposure: 'model-only',
       description: 'Start one separable job on a factory profile or a base role (agent). Factory implementers and documenters write only in external snapshots; '
         + 'documentation needs an explicit user request. Explorers use read-only file tools; reviewers can run verification commands. The job reports evidence and ends; do not wait for it. '
         + `Preserve the original task language, quotes and constraints. Factory agents:\n${factoryCatalogue()}\n${hint}`,

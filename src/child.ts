@@ -8,7 +8,7 @@ import {
   READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, DelegateSchema, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   ReportSchema, WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkReport, reportProblems, type DelegateAnswer,
 } from './schema.ts';
-import { childBashAllowed, SESSION_TOOLS } from './config.ts';
+import { childBashAllowed, SCRIPT_TOOL, SESSION_TOOLS } from './config.ts';
 import { post, recent } from './wire.ts';
 import { ENGLISH_RULE, repairToolArgs } from '@prjct.app/pi-tui-kit';
 import { maskSensitiveData, protectOutboundData } from '@prjct.app/pi-secrets/privacy';
@@ -91,6 +91,8 @@ export function installGuard(
     pi.registerTool({
       name: DELEGATE_TOOL,
       label: 'Delegate',
+      // Delegating, asking up and switching models are the model's own acts, never a script's.
+      exposure: 'model-only',
       description: 'Ask for a second agent on a separable part of this task. Set agent to one base role or package-owned factory profile. '
         + 'It runs beside you and reports to the session that asked for your work, not to you, '
         + 'so do not wait for it and do not plan around its answer. Delegate only what is genuinely '
@@ -116,6 +118,7 @@ export function installGuard(
   pi.registerTool({
     name: MODEL_TOOL,
     label: 'Choose your model',
+    exposure: 'model-only',
     description: 'List the models this machine can run, or switch this session to one. You start on '
       + 'the model and reasoning level the session that asked had. Choose by the capabilities '
       + 'the task needs; price alone does not establish capability. Switching is instant.',
@@ -142,6 +145,7 @@ export function installGuard(
   pi.registerTool({
     name: ASK_TOOL,
     label: 'Ask your parent',
+    exposure: 'model-only',
     description: 'Ask whoever asked for your work when you are stuck on a decision that is not '
       + 'yours. The question travels up the delegation tree; the answer arrives by itself. Never '
       + 'wait for it: carry on with what you can, and if nothing can continue without the answer, '
@@ -246,7 +250,7 @@ export function installGuard(
   // Enforce the operator's switch again inside the child. The admitted tools are the first gate;
   // this one also catches a stale job or a tool injected by another route.
   const capabilities = env.PI_SUBAGENTS_ROLE === 'explorer' || env.PI_SUBAGENTS_ROLE === 'reviewer'
-    ? new Set([...READ_ONLY_TOOLS, ...CHILD_TOOLS, ...SESSION_TOOLS, DELEGATE_TOOL, WIRE_SEND_TOOL, WIRE_INBOX_TOOL,
+    ? new Set([...READ_ONLY_TOOLS, ...CHILD_TOOLS, ...SESSION_TOOLS, SCRIPT_TOOL, DELEGATE_TOOL, WIRE_SEND_TOOL, WIRE_INBOX_TOOL,
       ...(env.PI_SUBAGENTS_ROLE === 'reviewer' ? ['bash'] : [])]) : undefined;
   const allowed = requested.filter(tool => (tool !== 'bash' || bash) && (!capabilities || capabilities.has(tool)));
 

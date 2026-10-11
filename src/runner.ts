@@ -9,7 +9,7 @@ import { childPrompt, neutralCatalogue, type ModelChoice } from './context.ts';
 import { factoryAgent } from './factory.ts';
 import { wireForwarder } from './forward-wire.ts';
 import { DEFAULT_LIMITS } from './manager.ts';
-import { childBashAllowed } from './config.ts';
+import { childBashAllowed, SCRIPT_TOOL } from './config.ts';
 import {
   READY_PREFIX, ASK_PREFIX, ASK_TOOL, CHILD_TOOLS, DELEGATE_TOOL, MEMORY_TOOL, MODEL_TOOL, READ_ONLY_TOOLS, REPORT_TOOL,
   WIRE_INBOX_TOOL, WIRE_SEND_TOOL, checkAsk, checkModelAsk, checkQuestionAsk,
@@ -142,8 +142,9 @@ export function frames(onFrame: (value: unknown) => void, onOverflow: () => void
 export function childArgs(guardPath: string, tools: readonly string[] = CHILD_TOOLS, projectTrusted = false): string[] {
   return [
     '--mode', 'rpc',
-    // Ambient discovery off; only the guard this package owns is loaded.
-    '--no-extensions', '-e', guardPath,
+    // Ambient discovery off; only the guard this package owns is loaded,
+    // plus Pi's codemode built-in when the child inherits it.
+    '--no-extensions', '-e', guardPath, ...(tools.includes(SCRIPT_TOOL) ? ['-e', 'builtin:codemode'] : []),
     '--no-skills', '--no-prompt-templates',
     // Carry explicit parent trust; never ask a person in a background child.
     projectTrusted ? '--approve' : '--no-approve',

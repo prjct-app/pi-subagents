@@ -44,7 +44,12 @@ export function loadSettings(cwd: string, home = agentHome(), warn: (text: strin
 }
 
 const READ_ONLY = new Set<string>(READ_ONLY_ABILITIES);
-const CORE_TOOLS = new Set<string>([...READ_ONLY, 'edit', 'write', 'bash']);
+/**
+ * Codemode crosses to every role: a script calls only tools the child holds,
+ * and the guard's tool_call check runs on each nested call as on a direct one.
+ */
+export const SCRIPT_TOOL = 'codemode';
+const CORE_TOOLS = new Set<string>([...READ_ONLY, 'edit', 'write', 'bash', SCRIPT_TOOL]);
 /** Session-local controls require explicit package admission, even for readers. */
 export const CONTEXT_TOOLS = ['context_status', 'context_history', 'context_compact'];
 /** Reporting can publish externally and crosses only through explicit package admission. */
@@ -78,7 +83,7 @@ export function roleTools(role: Role, active: readonly string[], allowBash = chi
   const tools = active.filter(name => !name.startsWith('agent_') && !name.startsWith('subagent_'))
     .filter(name => allowExtensionTools || CORE_TOOLS.has(name));
   const bash = allowBash && BASH_ROLES.includes(role);
-  if (role !== 'worker') return tools.filter(name => READ_ONLY.has(name) || (allowExtensionTools && SESSION_TOOLS.includes(name)) || (name === 'bash' && bash));
+  if (role !== 'worker') return tools.filter(name => READ_ONLY.has(name) || name === SCRIPT_TOOL || (allowExtensionTools && SESSION_TOOLS.includes(name)) || (name === 'bash' && bash));
   return tools.filter(name => name !== 'bash' || bash);
 }
 

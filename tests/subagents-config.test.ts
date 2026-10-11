@@ -58,6 +58,14 @@ test('readers never gain file mutation or unknown extension tools; reviewers kee
   assert.deepEqual(roleTools('worker', ['read', 'bash'], true), ['read', 'bash']);
 });
 
+test('codemode crosses to every role; the guard still checks each nested call', () => {
+  const active = ['read', 'grep', 'edit', 'bash', 'codemode', 'remote_mutation'];
+  assert.deepEqual(roleTools('explorer', active, true), ['read', 'grep', 'codemode']);
+  assert.deepEqual(roleTools('reviewer', active, true), ['read', 'grep', 'bash', 'codemode']);
+  assert.deepEqual(roleTools('worker', active, false), ['read', 'grep', 'edit', 'codemode']);
+  assert.deepEqual(roleTools('explorer', ['read', 'grep'], true), ['read', 'grep'], 'only a parent with codemode passes it on');
+});
+
 test('removed classifier tools are never inherited as built-in capabilities', () => {
   const active = ['read', 'grep', 'edit', 'bash', 'ask_jev', 'remote_mutation'];
   assert.deepEqual(roleTools('explorer', active, true), ['read', 'grep']);

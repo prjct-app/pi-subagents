@@ -39,6 +39,14 @@ export default function fixtureProvider(pi: ExtensionAPI): void {
           message.content = [{ type: 'toolCall', id: 'fixture-delegate', name: 'subagent_delegate', arguments: { agent: 'explorer', subject: 'Read contracts', task: 'Inspect the contract.' } }];
           stream.push({ type: 'done', reason: 'toolUse', message }); stream.end(); return;
         }
+        if (text.includes('fixture-codemode') && previous?.toolName !== 'codemode') {
+          message.content = [{ type: 'toolCall', id: 'fixture-codemode', name: 'codemode', arguments: { code: [
+            "const note = await tools.read({ path: 'note.txt' });",
+            "const bash = await (async () => tools.bash({ command: 'true' }))().then(() => 'BASH_RAN', () => 'BASH_BLOCKED');",
+            "return note.trim() + ' ' + bash;",
+          ].join('\n') } }];
+          stream.push({ type: 'done', reason: 'toolUse', message }); stream.end(); return;
+        }
         if (text.includes('fixture-bash') && previous?.toolName !== 'bash') {
           message.content = [{ type: 'toolCall', id: 'fixture-bash', name: 'bash', arguments: { command: 'printf SDK_BASH_OK' } }];
           stream.push({ type: 'done', reason: 'toolUse', message }); stream.end(); return;
@@ -46,6 +54,7 @@ export default function fixtureProvider(pi: ExtensionAPI): void {
         message.content = [{ type: 'toolCall', id: 'fixture-report', name: 'subagent_report', arguments: {
           outcome: 'completed', summary: 'Offline SDK execution succeeded.', criteria: [{ criterion: 'Uses only authorized tools', met: 'yes', evidence: context.messages.flatMap(message => message.role === 'system' ? message.toolsAdded ?? [] : []).map(tool => tool.name).join(', ') }], findings: text.includes('fixture-many-findings') ? Array.from({ length: 60 }, (_, n) => ({ detail: n === 59 ? 'CRITICAL_TAIL' : `Finding ${n}` })) : [], blockers: [],
           ...(text.includes('fixture-bash') ? { checks: [{ command: 'printf SDK_BASH_OK', passed: !previous?.isError && JSON.stringify(previous?.content).includes('SDK_BASH_OK') }] } : {}),
+          ...(text.includes('fixture-codemode') ? { checks: [{ command: 'codemode', passed: !previous?.isError && JSON.stringify(previous?.content).includes('READ_OK BASH_BLOCKED') }] } : {}),
           ...(text.includes('fixture-thinking') ? { checks: [{ command: 'SDK reasoning level', passed: options?.reasoning === 'high' }] } : {}),
         } }];
         stream.push({ type: 'start', partial: message });

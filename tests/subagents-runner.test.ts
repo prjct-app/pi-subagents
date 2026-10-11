@@ -168,6 +168,12 @@ test('the child starts with ambient discovery off, and able to read and to repor
   assert.equal(args.some(arg => /write|edit|bash|apply/.test(arg)), false);
 });
 
+test('a child that inherits codemode loads the built-in that --no-extensions turns off', () => {
+  const args = childArgs('/owned/guard.ts', ['read', 'codemode', REPORT_TOOL]);
+  assert.deepEqual(args.slice(2, 7), ['--no-extensions', '-e', '/owned/guard.ts', '-e', 'builtin:codemode']);
+  assert.equal(childArgs('/owned/guard.ts').includes('builtin:codemode'), false);
+});
+
 test('the runner honours the bash switch over what admission already gave the role', () => {
   const worker = ['read', 'bash', 'edit', 'write'];
   assert.deepEqual(selectChildTools(worker, false), ['read', 'edit', 'write']);

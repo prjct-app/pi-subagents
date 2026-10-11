@@ -1,3 +1,8 @@
+## 0.5.7 (2026-10-11)
+
+- Children inherit `codemode` when the parent session has it, for every role, in both runners: the process runner loads `builtin:codemode` past `--no-extensions` and the SDK runner adds `createCodemodeExtension()`. Each call a script makes still passes the child guard, so an explorer cannot reach bash from a script.
+- `agent_delegate`, `subagent_delegate`, `subagent_ask` and `subagent_model` are `model-only`: the model calls them, codemode scripts cannot.
+
 ## 0.5.6 (2026-10-11)
 
 - Keep `agent_jobs` and `agent_reply` out of the model's tool list unless delegation is on or the session has a job in its ledger. A session that never delegates saves about 400 tokens per request; restored jobs keep their tools after a reload.

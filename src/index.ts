@@ -77,6 +77,8 @@ export type JobsOptions = {
  * until a person types /agents on. Left on, models delegated even trivial tasks.
  */
 const DELEGATE_TOOL_NAME = 'agent_delegate';
+const JOB_TOOL_NAMES = ['agent_jobs', 'agent_reply'];
+const PARENT_TOOL_NAMES = [DELEGATE_TOOL_NAME, ...JOB_TOOL_NAMES];
 const DELEGATION_OFF = 'Subagents are off in this session. Do this task yourself with your own tools. '
   + 'Only the user can turn delegation on, with /agents on.';
 
@@ -166,14 +168,21 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   /**
    * Shows or hides agent_delegate to match the toggle. A hidden tool is not in
    * the prompt at all, so the model is not tempted to hand off simple work.
+   * agent_jobs and agent_reply only act on jobs, so they are shown while
+   * delegation is on or a job is in the ledger, and cost nothing otherwise.
    */
   const applyDelegation = (context?: ExtensionContext): void => {
     try {
       const active = pi.getActiveTools();
-      const next = state.delegation.enabled
-        ? [...new Set([...active, DELEGATE_TOOL_NAME])]
-        : active.filter(name => name !== DELEGATE_TOOL_NAME);
-      if (next.length !== active.length) pi.setActiveTools(next);
+      const shown = new Set<string>([
+        ...(state.delegation.enabled ? [DELEGATE_TOOL_NAME] : []),
+        ...(state.delegation.enabled || (state.jobs?.ledger().jobs.length ?? 0) > 0 ? JOB_TOOL_NAMES : []),
+      ]);
+      const next = [
+        ...active.filter(name => !PARENT_TOOL_NAMES.includes(name) || shown.has(name)),
+        ...[...shown].filter(name => !active.includes(name)),
+      ];
+      if (next.length !== active.length || next.some((name, index) => name !== active[index])) pi.setActiveTools(next);
     } catch { /* not initialized yet: session_start applies it */ }
     showWidget(context);
   };
@@ -498,7 +507,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
           const workspace = job.patchFile ? finalizeExternalWorkspace({ cwd: job.cwd, patchFile: job.patchFile }) : Promise.resolve('');
           void Promise.all([retainSettlement(job, directory), workspace]).catch(() => retained.delete(job.id));
         }
-        showWidget();
+        applyDelegation();
         notify();
         for (const wake of statusWaiters) wake();
         if (undelivered(ledger).length > 0) queueMicrotask(deliver);
@@ -834,9 +843,9 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     state.delegation.enabled = mode?.data?.enabled === true;
     state.choices = choices(context);
     registerDelegate(choiceHint(state.choices));
-    applyDelegation(context);
     const jobs = build(context.sessionManager.getSessionId());
     state.jobs = jobs;
+    applyDelegation(context);
     // Only this session's own ledger, never a fork's copy of one: a fork would
     // otherwise inherit jobs whose processes belong to the session it came from.
     if (event?.reason === 'fork' || event?.reason === 'new') return;
@@ -852,6 +861,7 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       const withReport = job.report || !reports.has(job.id) ? job : { ...job, report: reports.get(job.id) as Job['report'] };
       return receipts.has(job.id) ? { ...withReport, delivered: withReport.delivered ?? Date.now() } : withReport;
     }) });
+    applyDelegation(context);
     deliver();
   });
 

@@ -1,3 +1,7 @@
+## 0.5.6 (2026-10-11)
+
+- Keep `agent_jobs` and `agent_reply` out of the model's tool list unless delegation is on or the session has a job in its ledger. A session that never delegates saves about 400 tokens per request; restored jobs keep their tools after a reload.
+
 ## 0.5.5 (2026-10-07)
 
 - Let every child role use evidence-backed issue reporting when `@prjct.app/pi-signals` is explicitly admitted. Preserve file and command capability boundaries in both SDK runners and factory profiles.

@@ -196,6 +196,29 @@ test('delegation is off by default: the model cannot see or call agent_delegate 
   assert.ok(!h.activeTools.names.includes('agent_delegate'));
 });
 
+test('agent_jobs and agent_reply cost no context until delegation is on or a job exists', async () => {
+  const h = host();
+  h.activeTools.names.push('agent_jobs', 'agent_reply');
+  await h.emit('session_start', { reason: 'startup' });
+  assert.ok(!h.activeTools.names.includes('agent_jobs'), 'hidden while off with an empty ledger');
+  assert.ok(!h.activeTools.names.includes('agent_reply'));
+  await h.commands.get('agents').handler('on', h.ctx);
+  assert.ok(h.activeTools.names.includes('agent_jobs'));
+  assert.ok(h.activeTools.names.includes('agent_reply'));
+  await h.delegate();
+  await h.commands.get('agents').handler('off', h.ctx);
+  assert.ok(!h.activeTools.names.includes('agent_delegate'));
+  assert.ok(h.activeTools.names.includes('agent_jobs'), 'a job in the ledger keeps its tools after /agents off');
+  assert.ok(h.activeTools.names.includes('agent_reply'));
+
+  // A reload with delegation off still shows them for the restored jobs.
+  const again = host();
+  again.entries.push(...h.entries);
+  await again.emit('session_start', { reason: 'reload' });
+  assert.ok(!again.activeTools.names.includes('agent_delegate'));
+  assert.ok(again.activeTools.names.includes('agent_jobs'));
+});
+
 test('/agents on survives a reload', async () => {
   const h = host();
   await h.emit('session_start', { reason: 'startup' });

@@ -108,6 +108,10 @@ files. The resulting `changes.patch` must be reviewed and applied separately.
   `jobId` and `message` (required for steer/resume). `result` returns the full report.
 - **`agent_reply`**: `name`, `answer`; answer a question escalated by a live child.
 
+`agent_delegate` is in the model's tool list only while `/agents on`. `agent_jobs` and
+`agent_reply` are listed while delegation is on or the session has a job in its ledger,
+so a session that never delegates pays no context for them.
+
 Explicit automatic triage uses the parent model and reasoning through the Pi SDK.
 Delegation, steering, and resumes preserve the original text, including non-English
 instructions and exact constraints. The active model makes semantic decisions.

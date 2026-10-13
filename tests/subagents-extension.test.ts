@@ -629,7 +629,7 @@ test('a shutdown mid-triage admits no child into a session that is leaving', asy
   const auto = process.env.PI_AGENTS_AUTO;
   t.after(() => { if (auto === undefined) delete process.env.PI_AGENTS_AUTO; else process.env.PI_AGENTS_AUTO = auto; });
   process.env.PI_AGENTS_AUTO = '1';
-  let release: (value: string) => void = () => undefined;
+  const release: (value: string) => void = () => undefined;
   const calls = { value: 0 };
   const h = host({ complete: () => { calls.value += 1; return new Promise<string>(resolve => { release = resolve; }); } });
   await h.emit('session_start', { reason: 'startup' });

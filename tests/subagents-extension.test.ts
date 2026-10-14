@@ -629,16 +629,16 @@ test('a shutdown mid-triage admits no child into a session that is leaving', asy
   const auto = process.env.PI_AGENTS_AUTO;
   t.after(() => { if (auto === undefined) delete process.env.PI_AGENTS_AUTO; else process.env.PI_AGENTS_AUTO = auto; });
   process.env.PI_AGENTS_AUTO = '1';
-  const release: (value: string) => void = () => undefined;
+  const pending = { release: (_value: string): void => undefined };
   const calls = { value: 0 };
-  const h = host({ complete: () => { calls.value += 1; return new Promise<string>(resolve => { release = resolve; }); } });
+  const h = host({ complete: () => { calls.value += 1; return new Promise<string>(resolve => { pending.release = resolve; }); } });
   await h.emit('session_start', { reason: 'startup' });
   await h.commands.get('agents').handler('on', h.ctx);
   const prompt = `Rework the store and the runner together. ${'Detail. '.repeat(30)}`;
   await h.emit('input', { text: prompt, source: 'interactive' });
   // The triage is still in flight when the session starts closing.
   await h.emit('session_shutdown');
-  release('{"complex": true, "subtasks": [{"role": "explorer", "subject": "map it", "task": "Read src/."}]}');
+  pending.release('{"complex": true, "subtasks": [{"role": "explorer", "subject": "map it", "task": "Read src/."}]}');
   await settleTick(); await settleTick();
   assert.equal(calls.value, 1, 'the triage really was in flight');
   assert.equal(h.runs.size, 0, 'no orphan: the closed flag stopped the admission');

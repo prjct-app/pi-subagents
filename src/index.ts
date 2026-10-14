@@ -54,6 +54,18 @@ const STATUS_WAIT_MS = 30_000;
  */
 const LEDGER_WRITE_MS = 1_000;
 
+
+/** Marks a snapshot job whose task text an earlier entry of the session holds. */
+export const TASK_REF = '[task in an earlier agent-jobs entry]';
+
+/** The newest real task text per job id, from agent-jobs snapshots and agent-job records. */
+export const savedTasks = (branch: readonly any[]): Map<string, string> => new Map(branch.flatMap(entry => {
+  if (entry?.type !== 'custom') return [];
+  const jobs = entry.customType === 'agent-jobs' ? entry.data?.jobs : entry.customType === 'agent-job' ? [entry.data] : [];
+  return (Array.isArray(jobs) ? jobs : []).flatMap((job: any) =>
+    typeof job?.id === 'string' && typeof job.task === 'string' && job.task !== TASK_REF ? [[job.id, job.task] as [string, string]] : []);
+}));
+
 export type JobsOptions = {
   /** The mailbox thread a job belongs to, when it was born inside one. */
   activeRoot?: () => string | undefined;
@@ -115,15 +127,25 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
   const inFlight = new Map<string, number>();
   const recorded = new Set<string>();
   const retained = new Set<string>();
+  /** Jobs whose task text an earlier entry of this session already holds. */
+  const taskWritten = new Set<string>();
   /**
    * A job whose full record, report included, was already appended as an
    * `agent-job` entry keeps only a reference in later snapshots; restore puts
-   * the report back from that entry.
+   * the report back from that entry. The task text, 78% of every snapshot, is
+   * written once: later snapshots carry TASK_REF and restore resolves it.
    */
-  const compactLedger = (ledger: Ledger): Ledger => ({
-    ...ledger,
-    jobs: ledger.jobs.map(job => recorded.has(job.id) && job.report ? { ...job, report: undefined } : job),
-  });
+  const compactLedger = (ledger: Ledger): Ledger => {
+    const compacted = {
+      ...ledger,
+      jobs: ledger.jobs.map(job => {
+        const withoutReport = recorded.has(job.id) && job.report ? { ...job, report: undefined } : job;
+        return taskWritten.has(job.id) ? { ...withoutReport, task: TASK_REF } : withoutReport;
+      }),
+    };
+    for (const job of ledger.jobs) taskWritten.add(job.id);
+    return compacted;
+  };
   const ledgerWrite = {
     pending: undefined as Ledger | undefined,
     timer: undefined as ReturnType<typeof setTimeout> | undefined,
@@ -831,9 +853,11 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
     ledgerWrite.timer = undefined;
     ledgerWrite.pending = undefined;
     ledgerWrite.terminal.clear();
+    taskWritten.clear();
     for (const entry of context.sessionManager.getBranch() as any[]) {
       if (entry.type === 'custom' && entry.customType === 'agent-job' && entry.data?.id) recorded.add(entry.data.id);
     }
+    for (const [id] of savedTasks(context.sessionManager.getBranch() as any[])) taskWritten.add(id);
     if (!options.makeRunner) {
       void cleanupStorage(storageRoot(), state.settings.retentionDays).catch(() => undefined);
       void cleanupExternalWorkspaces(undefined, state.settings.workspaceRetentionHours).catch(() => undefined);
@@ -859,7 +883,9 @@ export function installJobs(pi: ExtensionAPI, options: JobsOptions = {}): JobsHa
       entry.type === 'custom_message' && entry.customType === 'agent-job-result' ? entry.details?.deliveryIds ?? [] : []));
     const reports = new Map<string, unknown>((context.sessionManager.getBranch() as any[]).flatMap(entry =>
       entry.type === 'custom' && entry.customType === 'agent-job' && entry.data?.id && entry.data.report ? [[entry.data.id, entry.data.report]] : []));
-    await jobs.restore({ ...(data as Ledger), jobs: (data as Ledger).jobs.map(job => {
+    const tasks = savedTasks(context.sessionManager.getBranch() as any[]);
+    await jobs.restore({ ...(data as Ledger), jobs: (data as Ledger).jobs.map(stored => {
+      const job = stored.task === TASK_REF && tasks.has(stored.id) ? { ...stored, task: tasks.get(stored.id)! } : stored;
       const withReport = job.report || !reports.has(job.id) ? job : { ...job, report: reports.get(job.id) as Job['report'] };
       return receipts.has(job.id) ? { ...withReport, delivered: withReport.delivered ?? Date.now() } : withReport;
     }) });

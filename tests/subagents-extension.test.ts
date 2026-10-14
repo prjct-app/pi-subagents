@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { installJobs } from '../src/index.ts';
+import { installJobs, savedTasks, TASK_REF } from '../src/index.ts';
 import type { Handle, Runner, RunnerEvent } from '../src/runner.ts';
 import type { Job, Report } from '../src/schema.ts';
 import { isTerminal as isTerminalState } from '../src/schema.ts';
@@ -725,6 +725,32 @@ test('delivered reports are not repeated in later snapshots and come back on rel
   await again.emit('session_start', { reason: 'reload' });
   const result = await again.tools.get('agent_jobs').execute('result', { action: 'result', jobId: job.id });
   assert.deepEqual(result.details.report, good());
+});
+
+test('a task is written once; later snapshots reference it and a reload restores it', async () => {
+  const h = host();
+  await h.emit('session_start', { reason: 'resume' });
+  const task = `Read src/importer.ts. ${'context '.repeat(500)}`;
+  const first = (await h.delegate({ task })).details as Job;
+  const snapshots = () => h.entries.filter(entry => entry.customType === 'agent-jobs');
+  const firstTask = (entry: any) => entry.data.jobs.find((item: Job) => item.id === first.id).task;
+  assert.equal(firstTask(snapshots()[0]), task, 'the first snapshot holds the task');
+  await h.delegate({ subject: 'second look' });
+  await h.delegate({ subject: 'third look' });
+  assert.ok(snapshots().length >= 3);
+  for (const entry of snapshots().slice(1)) assert.equal(firstTask(entry), TASK_REF, 'later snapshots only point at it');
+  const live = await h.tools.get('agent_jobs').execute('result', { action: 'result', jobId: first.id });
+  assert.equal(live.details.task, task, 'the live ledger keeps the real task');
+  await h.emit('session_shutdown');
+  const again = host();
+  again.entries.push(...h.entries);
+  await again.emit('session_start', { reason: 'reload' });
+  const reloaded = await again.tools.get('agent_jobs').execute('result', { action: 'result', jobId: first.id });
+  assert.equal(reloaded.details.task, task, 'a reload restores the real task');
+  await again.delegate({ subject: 'after reload' });
+  assert.equal(again.ledger().jobs.find((item: Job) => item.id === first.id).task, TASK_REF, 'and keeps referencing the task it already wrote');
+  assert.equal(savedTasks(again.ctx.sessionManager.getBranch()).get(first.id), task);
+  await again.emit('session_shutdown');
 });
 
 test('reader roles never inherit writable tools even from writable parents', async () => {

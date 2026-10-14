@@ -1,3 +1,7 @@
+## Unreleased
+
+- Write each job's task text once per session. Later `agent-jobs` snapshots carry a reference and a reload resolves it from the earlier entry. The task was 78% of every snapshot; on 2026-10-07 a single session wrote 87 MB of snapshots. Nothing the model sees changes.
+
 ## 0.5.7 (2026-10-11)
 
 - Children inherit `codemode` when the parent session has it, for every role, in both runners: the process runner loads `builtin:codemode` past `--no-extensions` and the SDK runner adds `createCodemodeExtension()`. Each call a script makes still passes the child guard, so an explorer cannot reach bash from a script.

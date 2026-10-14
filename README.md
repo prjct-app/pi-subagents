@@ -247,11 +247,9 @@ Tests include native Pi runs against a local deterministic provider. They requir
 no API credentials or external model calls. The preview is a visual rendering of
 the component output; the interactive demo runs it in a real terminal.
 
-CI runs the checks on Linux and macOS with Node 22/24. Release publishing is a
-separate manual workflow. Configure the npm package's GitHub trusted publisher
-for `prjct-app/pi-subagents`, workflow `publish.yml`, then dispatch it on a matching
-`vX.Y.Z` tag. It verifies the version, runs checks, and publishes with provenance.
-No long-lived npm token is stored in the workflow. See
-[npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) for registry setup.
+CI runs the checks on Linux and macOS with Node 22/24. Merging a releasable
+conventional commit into `main` publishes the next version from the Release
+workflow through npm trusted publishing; nothing is published by hand. See
+[docs/releases.md](docs/releases.md).
 
 Sibling messages are forwarded for the full child lifetime, including after message 24. Failed deliveries retry without duplicating accepted messages. Reports preserve every criterion, finding and blocker without arbitrary count or text caps.

@@ -123,7 +123,7 @@ test('filters, search and selection remain tied to IDs during changes', t => {
   const a = job({ id: 'job_first', name: 'Ada', state: 'completed' }); const b = job({ id: 'job_second', name: 'Nadia' });
   const h = harness([a, b]); t.after(() => h.panel.dispose());
   h.panel.handleInput('f'); assert.match(h.text(), /Nadia.*worker/);
-  h.store.jobs = [job({ name: 'Zoe' }), b, a]; h.store.listener();
+  h.store.jobs = [job({ id: 'job_third', name: 'Zoe' }), b, a]; h.store.listener();
   assert.match(h.text(), /Nadia.*worker/);
   h.panel.handleInput('/'); h.panel.handleInput('Ada'); h.panel.handleInput('\r');
   assert.match(h.text(), /No matching agents/);

@@ -1,3 +1,9 @@
+## [0.5.8](https://github.com/prjct-app/pi-subagents/compare/v0.5.7...v0.5.8) (2026-10-14)
+
+### Performance Improvements
+
+* write each job's task once in agent-jobs snapshots ([b565fcd](https://github.com/prjct-app/pi-subagents/commit/b565fcd5f10c129e374ff74182375d3b021de877))
+
 ## Unreleased
 
 - Write each job's task text once per session. Later `agent-jobs` snapshots carry a reference and a reload resolves it from the earlier entry. The task was 78% of every snapshot; on 2026-10-07 a single session wrote 87 MB of snapshots. Nothing the model sees changes.

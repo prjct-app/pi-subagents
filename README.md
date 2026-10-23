@@ -9,7 +9,7 @@ reports and explicit continuation. No external service, scheduler or team setup.
 pi install npm:@prjct.app/pi-subagents
 ```
 
-Tested with Pi **1.0.4**; requires Node **22.19+**.
+Tested with Pi **1.0.4**; requires Node **22.23.4+**.
 Host libraries use wildcard peers as required by Pi packaging. Compatibility
 with other Pi releases has not been verified. The default runner creates native
 sessions through Pi's SDK. A separate Pi process is available as an explicit option.
